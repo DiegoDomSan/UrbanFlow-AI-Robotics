@@ -1,22 +1,79 @@
 # UrbanFlow AI Robotics
 
-UrbanFlow AI Robotics is an AI and robotics project focused on improving urban resilience to flooding through simulation, intelligent decision-making, and autonomous inspection.
+**AI-powered urban simulation for flood resilience, robotic inspection, and intelligent route optimization.**
 
-The project aims to develop an **urban digital twin** that simulates rainfall, drainage systems, and flood propagation, while integrating robotic agents to monitor critical areas, collect information, and support dynamic route planning.
+## Team Members
 
-By combining urban simulation, sensor data, and AI-based coordination, UrbanFlow explores how cities can detect potential hazards, optimize emergency routes, and maintain access to critical infrastructure under uncertain conditions, including unreliable sensors and limited communication.
+| Name                    | Role                     | Responsibilities                                          |
+|-------------------------|--------------------------|-----------------------------------------------------------|
+| Nieves Segura Pérez     | Simulation & Environment | Urban modeling, rainfall, and drainage simulation         |
+| Sebastián Escobar Díaz  | AI & Decision-Making     | Risk assessment, pathfinding, and coordination algorithms |
+| Diego Domínguez Sánchez | Robotics & Integration   | Robotic agents, system integration, and visualization     |
 
-### Core Components
 
-- **Urban Simulation:** Modeling rainfall, drainage, and flood dynamics.
-- **AI & Decision-Making:** Risk assessment, inspection planning, and route optimization.
-- **Robotic Agents:** Autonomous navigation and monitoring of critical areas.
-- **Resilience Evaluation:** Testing system performance under different scenarios and constraints.
+## Project Description
 
-### Objective
+UrbanFlow AI Robotics explores how artificial intelligence and robotics can improve urban resilience to flooding.
 
-To develop a simulation-based platform for researching how AI and robotics can improve flood monitoring, urban infrastructure resilience, and emergency response.
+The project aims to develop a simulated urban environment that models rainfall, drainage systems, and flood dynamics. Robotic agents will be investigated as a means of inspecting critical areas, while AI-based algorithms will support risk assessment and dynamic route optimization.
 
----
+The system will be evaluated under different conditions, including incomplete sensor data and limited communication, to investigate the robustness of intelligent urban monitoring and emergency response.
 
-**UrbanFlow AI Robotics — Intelligent systems for more resilient cities.**
+## Technologies
+
+The planned technology stack includes Python, NumPy, NetworkX, and Pygame. The final selection will depend on the implementation requirements.
+
+## Setup and Installation
+
+### Prerequisites
+
+- Python 3.10 or newer.
+- Git.
+
+### Clone the repository
+
+```bash
+git clone <GITLAB_REPOSITORY_URL>
+cd UrbanFlow-AI-Robotics
+```
+
+### Create and activate a virtual environment
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+```
+
+On Windows:
+
+```bash
+.venv\Scripts\activate
+```
+
+### Install dependencies
+
+Once the project dependencies are defined in `requirements.txt`, run:
+
+```bash
+pip install -r requirements.txt
+```
+
+## Running the Software
+
+Execution instructions will be updated when the initial prototype and application entry point are available.
+
+The final repository will include the exact commands and dependencies required to reproduce the application. Docker Compose will be considered if it is suitable for the final system architecture.
+
+## Documentation
+
+Project documentation, technical decisions, meeting minutes, experimental results, and final deliverables will be maintained in this repository.
+
+Individual weekly logbooks will document each team member's activities, workload, contributions, challenges, and learning progress.
+
+## Project Status
+
+Currently in the concept and initial development phase.
+
+## Objective
+
+To investigate how AI, simulation, and robotic agents can support flood monitoring, critical-route planning, and urban infrastructure resilience.
