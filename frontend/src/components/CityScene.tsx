@@ -194,11 +194,19 @@ function CityContent({ data }: { data: GeoFeatureCollection }) {
 
       <OrbitControls
         makeDefault
-        enableDamping
+        enableRotate
+        enableZoom
         enablePan
-        minDistance={8}
-        maxDistance={950}
-        maxPolarAngle={Math.PI / 2.02}
+        enableDamping
+        dampingFactor={0.08}
+        rotateSpeed={0.7}
+        zoomSpeed={1.0}
+        panSpeed={0.8}
+        screenSpacePanning
+        minDistance={5}
+        maxDistance={1100}
+        minPolarAngle={0}
+        maxPolarAngle={Math.PI}
         target={[0, 0, 0]}
       />
     </>
