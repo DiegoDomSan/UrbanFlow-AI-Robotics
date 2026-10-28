@@ -7,6 +7,8 @@ import { useCityStore } from "../stores/useCityStore";
 import { LandCover } from "../city/LandCover";
 
 import { Buildings } from "../city/layers/Buildings";
+import { Roads } from "../city/layers/Roads";
+
 import type {
   GeoFeature,
   GeoFeatureCollection,
@@ -49,86 +51,6 @@ function roadWidth(type: string): number {
   };
 
   return widths[type] ?? 5;
-}
-
-function Roads({
-  features,
-  underground,
-}: {
-  features: GeoFeature[];
-  underground: boolean;
-}) {
-  const segments = useMemo(() => {
-    const result: {
-      x: number;
-      z: number;
-      length: number;
-      width: number;
-      angle: number;
-    }[] = [];
-
-    for (const feature of features) {
-      const type = feature.properties?.highway;
-      if (typeof type !== "string" || !feature.geometry) continue;
-
-      const lines =
-        feature.geometry.type === "LineString"
-          ? [feature.geometry.coordinates]
-          : feature.geometry.type === "MultiLineString"
-            ? feature.geometry.coordinates
-            : [];
-
-      for (const line of lines) {
-        for (let i = 0; i < line.length - 1; i++) {
-          const [ax, az] = toWorld([line[i][0], line[i][1]]);
-          const [bx, bz] = toWorld([line[i + 1][0], line[i + 1][1]]);
-
-          const x = (ax + bx) / 2;
-          const z = (az + bz) / 2;
-
-          if (!insideArea(x, z)) continue;
-
-          const dx = bx - ax;
-          const dz = bz - az;
-          const length = Math.hypot(dx, dz);
-
-          if (length < 0.05) continue;
-
-          result.push({
-            x,
-            z,
-            length,
-            width: roadWidth(type),
-            angle: Math.atan2(dx, dz),
-          });
-        }
-      }
-    }
-
-    return result;
-  }, [features]);
-
-  return (
-    <group name="Paiporta Roads">
-      {segments.map((road, index) => (
-        <mesh
-          key={index}
-          position={[road.x, 0.055, road.z]}
-          rotation={[0, road.angle, 0]}
-          receiveShadow
-        >
-          <boxGeometry args={[road.width, 0.08, road.length]} />
-          <meshStandardMaterial
-            color={underground ? "#668da5" : "#263746"}
-            transparent={underground}
-            opacity={underground ? 0.18 : 1}
-            roughness={0.95}
-            depthWrite={!underground}
-          />
-        </mesh>
-      ))}
-    </group>
-  );
 }
 
 function UndergroundPreview({ visible }: { visible: boolean }) {
