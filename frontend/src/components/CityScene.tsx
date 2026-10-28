@@ -8,6 +8,7 @@ import { LandCover } from "../city/LandCover";
 
 import { Buildings } from "../city/layers/Buildings";
 import { Roads } from "../city/layers/Roads";
+import { Waterways } from "../city/layers/Waterways";
 
 import type {
   GeoFeature,
@@ -109,6 +110,8 @@ function CityContent({ data }: { data: GeoFeatureCollection }) {
       <LandCover features={data.features} underground={underground} />
 
       <Roads features={data.features} underground={underground} />
+
+      <Waterways features={data.features} underground={underground} />
 
       <Buildings features={data.features} underground={underground} />
 
