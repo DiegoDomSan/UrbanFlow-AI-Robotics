@@ -4,11 +4,13 @@ import { OrbitControls } from "@react-three/drei";
 import * as THREE from "three";
 
 import { useCityStore } from "../stores/useCityStore";
-import { LandCover } from "../city/LandCover";
+import { LandCover } from "../city/layers/LandCover";
 
 import { Buildings } from "../city/layers/Buildings";
 import { Roads } from "../city/layers/Roads";
-import { Waterways } from "../city/layers/Waterways";
+
+import { Vegetation } from "../city/layers/Vegetation";
+// import { Waterways } from "../city/layers/Waterways";
 
 import type {
   GeoFeature,
@@ -109,9 +111,21 @@ function CityContent({ data }: { data: GeoFeatureCollection }) {
 
       <LandCover features={data.features} underground={underground} />
 
+      <Vegetation features={data.features} underground={underground} />
+
       <Roads features={data.features} underground={underground} />
 
-      <Waterways features={data.features} underground={underground} />
+      {/* <Waterways features={data.features} underground={underground} /> */}
+
+      {/*
+      TODO — UrbanFlow AI: Waterways
+
+      Water rendering is temporarily disabled because the current
+      GeoJSON representation produces incorrect overlapping surfaces.
+
+      Future implementation will use verified geographic data
+      to reconstruct the real Barranco del Poyo channel.
+  */}
 
       <Buildings features={data.features} underground={underground} />
 
