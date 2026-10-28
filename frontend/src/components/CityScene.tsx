@@ -2,23 +2,15 @@ import { useEffect, useMemo, useState } from "react";
 import { Canvas } from "@react-three/fiber";
 import { OrbitControls } from "@react-three/drei";
 import * as THREE from "three";
+
 import { useCityStore } from "../stores/useCityStore";
+import { LandCover } from "../city/LandCover";
 
-type Properties = Record<string, unknown>;
-
-type Feature = {
-  type: "Feature";
-  properties: Properties;
-  geometry: {
-    type: string;
-    coordinates: any;
-  } | null;
-};
-
-type FeatureCollection = {
-  type: "FeatureCollection";
-  features: Feature[];
-};
+import { Buildings } from "../city/layers/Buildings";
+import type {
+  GeoFeature,
+  GeoFeatureCollection,
+} from "../city/geo/geojsonTypes";
 
 const CENTER_LAT = 39.428;
 const CENTER_LON = -0.4184;
@@ -43,22 +35,6 @@ function insideArea(x: number, z: number) {
   return Math.abs(x) <= SIZE / 2 && Math.abs(z) <= SIZE / 2;
 }
 
-function buildingHeight(props: Properties): number {
-  const height = Number.parseFloat(String(props.height ?? ""));
-  if (Number.isFinite(height) && height > 0) {
-    return height;
-  }
-
-  const levels = Number.parseFloat(String(props["building:levels"] ?? ""));
-
-  if (Number.isFinite(levels) && levels > 0) {
-    return levels * 3.1;
-  }
-
-  // Estimación visual, no altura verificada
-  return 10;
-}
-
 function roadWidth(type: string): number {
   const widths: Record<string, number> = {
     primary: 11,
@@ -75,244 +51,11 @@ function roadWidth(type: string): number {
   return widths[type] ?? 5;
 }
 
-function createBuildingGeometry(
-  polygon: number[][][],
-  height: number,
-): THREE.ExtrudeGeometry | null {
-  const outer = polygon[0];
-
-  if (!outer || outer.length < 4) return null;
-
-  const toPoint = (coord: number[]) => {
-    const [x, z] = toWorld(coord);
-
-    // Coordenadas para extrusión vertical.
-    return new THREE.Vector2(x, -z);
-  };
-
-  const cleanRing = (ring: number[][]) => {
-    const points = ring.map(toPoint);
-
-    if (
-      points.length > 1 &&
-      points[0].distanceTo(points[points.length - 1]) < 0.001
-    ) {
-      points.pop();
-    }
-
-    return points;
-  };
-
-  const outerPoints = cleanRing(outer);
-
-  if (outerPoints.length < 3) return null;
-
-  // ShapeUtils espera contornos exteriores horarios
-  // para generar correctamente las tapas.
-  if (!THREE.ShapeUtils.isClockWise(outerPoints)) {
-    outerPoints.reverse();
-  }
-
-  const shape = new THREE.Shape(outerPoints);
-
-  for (const ring of polygon.slice(1)) {
-    const holePoints = cleanRing(ring);
-
-    if (holePoints.length < 3) continue;
-
-    // Los agujeros deben ser antihorarios.
-    if (THREE.ShapeUtils.isClockWise(holePoints)) {
-      holePoints.reverse();
-    }
-
-    shape.holes.push(new THREE.Path(holePoints));
-  }
-
-  const geometry = new THREE.ExtrudeGeometry(shape, {
-    depth: Math.max(height, 3),
-    bevelEnabled: false,
-    steps: 1,
-    curveSegments: 1,
-  });
-
-  geometry.rotateX(-Math.PI / 2);
-
-  return geometry;
-}
-
-function createRoofGeometry(
-  polygon: number[][][],
-  height: number,
-): THREE.BufferGeometry | null {
-  const outer = polygon[0];
-
-  if (!outer || outer.length < 4) return null;
-
-  const toPoint = (coord: number[]) => {
-    const [x, z] = toWorld(coord);
-    return new THREE.Vector2(x, -z);
-  };
-
-  const cleanRing = (ring: number[][]) => {
-    const points = ring.map(toPoint);
-
-    if (
-      points.length > 1 &&
-      points[0].distanceTo(points[points.length - 1]) < 0.001
-    ) {
-      points.pop();
-    }
-
-    return points;
-  };
-
-  const outerPoints = cleanRing(outer);
-  if (outerPoints.length < 3) return null;
-
-  if (!THREE.ShapeUtils.isClockWise(outerPoints)) {
-    outerPoints.reverse();
-  }
-
-  const shape = new THREE.Shape(outerPoints);
-
-  for (const ring of polygon.slice(1)) {
-    const holePoints = cleanRing(ring);
-
-    if (holePoints.length < 3) continue;
-
-    if (THREE.ShapeUtils.isClockWise(holePoints)) {
-      holePoints.reverse();
-    }
-
-    shape.holes.push(new THREE.Path(holePoints));
-  }
-
-  const geometry = new THREE.ShapeGeometry(shape);
-
-  // Convertir el plano XY a horizontal XZ.
-  geometry.rotateX(-Math.PI / 2);
-
-  // Colocar el tejado justo encima del edificio.
-  geometry.translate(0, height + 0.03, 0);
-
-  return geometry;
-}
-
-function Buildings({
-  features,
-  underground,
-}: {
-  features: Feature[];
-  underground: boolean;
-}) {
-  const buildings = useMemo(() => {
-    const result: {
-      geometry: THREE.ExtrudeGeometry;
-      roofGeometry: THREE.BufferGeometry | null;
-      height: number;
-    }[] = [];
-
-    for (const feature of features) {
-      if (!feature.properties?.building || !feature.geometry) continue;
-
-      const polygons: number[][][][] =
-        feature.geometry.type === "Polygon"
-          ? [feature.geometry.coordinates]
-          : feature.geometry.type === "MultiPolygon"
-            ? feature.geometry.coordinates
-            : [];
-
-      for (const polygon of polygons) {
-        const outer = polygon[0];
-        if (!outer?.length) continue;
-
-        const points = outer.map(toWorld);
-        const centerX =
-          points.reduce((sum, p) => sum + p[0], 0) / points.length;
-        const centerZ =
-          points.reduce((sum, p) => sum + p[1], 0) / points.length;
-
-        if (!insideArea(centerX, centerZ)) continue;
-
-        const height = buildingHeight(feature.properties);
-
-        const geometry = createBuildingGeometry(polygon, height);
-        if (!geometry) continue;
-
-        const roofGeometry = createRoofGeometry(polygon, height);
-
-        result.push({
-          geometry,
-          roofGeometry,
-          height,
-        });
-      }
-    }
-
-    return result;
-  }, [features]);
-
-  useEffect(() => {
-    return () => {
-      buildings.forEach((b) => {
-        b.geometry.dispose();
-        b.roofGeometry?.dispose();
-      });
-    };
-  }, [buildings]);
-
-  return (
-    <group name="Paiporta Buildings">
-      {buildings.map((building, index) => (
-        <group key={index}>
-          {/* Estructura principal */}
-          <mesh
-            geometry={building.geometry}
-            castShadow={!underground}
-            receiveShadow={false}
-            renderOrder={underground ? 2 : 0}
-          >
-            <meshStandardMaterial
-              color={underground ? "#4d9ac4" : "#163c63"}
-              transparent={underground}
-              opacity={underground ? 0.12 : 1}
-              roughness={0.75}
-              metalness={0.05}
-              side={THREE.DoubleSide}
-              depthWrite={!underground}
-            />
-          </mesh>
-
-          {/* Tejado */}
-          {building.roofGeometry && (
-            <mesh
-              geometry={building.roofGeometry}
-              renderOrder={underground ? 2 : 1}
-            >
-              <meshStandardMaterial
-                color={underground ? "#75b9dc" : "#285b86"}
-                transparent={underground}
-                opacity={underground ? 0.08 : 1}
-                roughness={0.8}
-                side={THREE.DoubleSide}
-                depthWrite={!underground}
-                polygonOffset
-                polygonOffsetFactor={-1}
-                polygonOffsetUnits={-1}
-              />
-            </mesh>
-          )}
-        </group>
-      ))}
-    </group>
-  );
-}
-
 function Roads({
   features,
   underground,
 }: {
-  features: Feature[];
+  features: GeoFeature[];
   underground: boolean;
 }) {
   const segments = useMemo(() => {
@@ -328,7 +71,7 @@ function Roads({
       const type = feature.properties?.highway;
       if (typeof type !== "string" || !feature.geometry) continue;
 
-      const lines: number[][][] =
+      const lines =
         feature.geometry.type === "LineString"
           ? [feature.geometry.coordinates]
           : feature.geometry.type === "MultiLineString"
@@ -337,8 +80,8 @@ function Roads({
 
       for (const line of lines) {
         for (let i = 0; i < line.length - 1; i++) {
-          const [ax, az] = toWorld(line[i]);
-          const [bx, bz] = toWorld(line[i + 1]);
+          const [ax, az] = toWorld([line[i][0], line[i][1]]);
+          const [bx, bz] = toWorld([line[i + 1][0], line[i + 1][1]]);
 
           const x = (ax + bx) / 2;
           const z = (az + bz) / 2;
@@ -408,7 +151,7 @@ function UndergroundPreview({ visible }: { visible: boolean }) {
   );
 }
 
-function CityContent({ data }: { data: FeatureCollection }) {
+function CityContent({ data }: { data: GeoFeatureCollection }) {
   const mode = useCityStore((s) => s.mode);
   const underground = mode === "underground";
 
@@ -420,7 +163,7 @@ function CityContent({ data }: { data: FeatureCollection }) {
 
       <directionalLight
         position={[180, 260, 100]}
-        intensity={1.7}
+        intensity={1.25}
         castShadow
         shadow-mapSize={[2048, 2048]}
         shadow-camera-left={-300}
@@ -433,13 +176,15 @@ function CityContent({ data }: { data: FeatureCollection }) {
         <boxGeometry args={[SIZE, 1, SIZE]} />
 
         <meshStandardMaterial
-          color={underground ? "#8ca9b7" : "#607d8b"}
+          color={underground ? "#8ca9b7" : "#a3b2b9"}
           transparent={underground}
           opacity={underground ? 0.1 : 1}
           roughness={1}
           depthWrite={!underground}
         />
       </mesh>
+
+      <LandCover features={data.features} underground={underground} />
 
       <Roads features={data.features} underground={underground} />
 
@@ -461,7 +206,7 @@ function CityContent({ data }: { data: FeatureCollection }) {
 }
 
 export function CityScene() {
-  const [data, setData] = useState<FeatureCollection | null>(null);
+  const [data, setData] = useState<GeoFeatureCollection | null>(null);
 
   const [error, setError] = useState<string | null>(null);
 
