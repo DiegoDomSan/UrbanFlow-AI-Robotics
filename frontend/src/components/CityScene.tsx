@@ -193,7 +193,7 @@ function createRoofGeometry(
   geometry.rotateX(-Math.PI / 2);
 
   // Colocar el tejado justo encima del edificio.
-  geometry.translate(0, height + 0.03, 0);
+  geometry.translate(0, Math.max(height, 3) + 0.01, 0);
 
   return geometry;
 }
@@ -263,47 +263,59 @@ function Buildings({
 
   return (
     <group name="Paiporta Buildings">
-      {buildings.map((building, index) => (
-        <group key={index}>
-          {/* Estructura principal */}
-          <mesh
-            geometry={building.geometry}
-            castShadow={!underground}
-            receiveShadow={false}
-            renderOrder={underground ? 2 : 0}
-          >
-            <meshStandardMaterial
-              color={underground ? "#4d9ac4" : "#163c63"}
-              transparent={underground}
-              opacity={underground ? 0.12 : 1}
-              roughness={0.75}
-              metalness={0.05}
-              side={THREE.DoubleSide}
-              depthWrite={!underground}
-            />
-          </mesh>
+      {buildings.map((building, index) => {
+        const wallColor = underground ? "#5297bd" : "#173e64";
+        const roofColor = underground ? "#5297bd" : "#32678d";
+        const opacity = underground ? 0.2 : 1;
 
-          {/* Tejado */}
-          {building.roofGeometry && (
+        return (
+          <group key={index}>
+            {/* Building body: walls only */}
             <mesh
-              geometry={building.roofGeometry}
-              renderOrder={underground ? 2 : 1}
+              geometry={building.geometry}
+              castShadow={!underground}
+              receiveShadow={!underground}
+              renderOrder={underground ? 2 : 0}
             >
+              {/* ExtrudeGeometry material 0 = top/bottom caps.
+                Hide them because we use a separate roof. */}
+              <meshBasicMaterial attach="material-0" visible={false} />
+
+              {/* ExtrudeGeometry material 1 = side walls */}
               <meshStandardMaterial
-                color={underground ? "#75b9dc" : "#285b86"}
+                attach="material-1"
+                color={wallColor}
                 transparent={underground}
-                opacity={underground ? 0.08 : 1}
-                roughness={0.8}
-                side={THREE.DoubleSide}
+                opacity={opacity}
                 depthWrite={!underground}
-                polygonOffset
-                polygonOffsetFactor={-1}
-                polygonOffsetUnits={-1}
+                side={THREE.DoubleSide}
+                roughness={0.82}
+                metalness={0.04}
               />
             </mesh>
-          )}
-        </group>
-      ))}
+
+            {/* Roof: same transparency as the walls */}
+            {building.roofGeometry && (
+              <mesh
+                geometry={building.roofGeometry}
+                castShadow={!underground}
+                receiveShadow={!underground}
+                renderOrder={underground ? 2 : 1}
+              >
+                <meshStandardMaterial
+                  color={roofColor}
+                  transparent={underground}
+                  opacity={opacity}
+                  depthWrite={!underground}
+                  side={THREE.DoubleSide}
+                  roughness={0.9}
+                  metalness={0}
+                />
+              </mesh>
+            )}
+          </group>
+        );
+      })}
     </group>
   );
 }
@@ -420,7 +432,7 @@ function CityContent({ data }: { data: FeatureCollection }) {
 
       <directionalLight
         position={[180, 260, 100]}
-        intensity={1.7}
+        intensity={1.25}
         castShadow
         shadow-mapSize={[2048, 2048]}
         shadow-camera-left={-300}
