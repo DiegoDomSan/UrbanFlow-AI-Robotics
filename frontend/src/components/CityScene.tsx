@@ -3,6 +3,7 @@ import { Canvas } from "@react-three/fiber";
 import { OrbitControls } from "@react-three/drei";
 import * as THREE from "three";
 import { useCityStore } from "../stores/useCityStore";
+import { LandCover } from "../city/LandCover";
 
 type Properties = Record<string, unknown>;
 
@@ -445,13 +446,15 @@ function CityContent({ data }: { data: FeatureCollection }) {
         <boxGeometry args={[SIZE, 1, SIZE]} />
 
         <meshStandardMaterial
-          color={underground ? "#8ca9b7" : "#607d8b"}
+          color={underground ? "#8ca9b7" : "#a3b2b9"}
           transparent={underground}
           opacity={underground ? 0.1 : 1}
           roughness={1}
           depthWrite={!underground}
         />
       </mesh>
+
+      <LandCover features={data.features} underground={underground} />
 
       <Roads features={data.features} underground={underground} />
 
