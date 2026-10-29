@@ -4,9 +4,14 @@ import { OrbitControls } from "@react-three/drei";
 import * as THREE from "three";
 
 import { useCityStore } from "../stores/useCityStore";
-import { LandCover } from "../city/LandCover";
+import { LandCover } from "../city/layers/LandCover";
 
 import { Buildings } from "../city/layers/Buildings";
+import { Roads } from "../city/layers/Roads";
+
+import { Vegetation } from "../city/layers/Vegetation";
+// import { Waterways } from "../city/layers/Waterways";
+
 import type {
   GeoFeature,
   GeoFeatureCollection,
@@ -49,86 +54,6 @@ function roadWidth(type: string): number {
   };
 
   return widths[type] ?? 5;
-}
-
-function Roads({
-  features,
-  underground,
-}: {
-  features: GeoFeature[];
-  underground: boolean;
-}) {
-  const segments = useMemo(() => {
-    const result: {
-      x: number;
-      z: number;
-      length: number;
-      width: number;
-      angle: number;
-    }[] = [];
-
-    for (const feature of features) {
-      const type = feature.properties?.highway;
-      if (typeof type !== "string" || !feature.geometry) continue;
-
-      const lines =
-        feature.geometry.type === "LineString"
-          ? [feature.geometry.coordinates]
-          : feature.geometry.type === "MultiLineString"
-            ? feature.geometry.coordinates
-            : [];
-
-      for (const line of lines) {
-        for (let i = 0; i < line.length - 1; i++) {
-          const [ax, az] = toWorld([line[i][0], line[i][1]]);
-          const [bx, bz] = toWorld([line[i + 1][0], line[i + 1][1]]);
-
-          const x = (ax + bx) / 2;
-          const z = (az + bz) / 2;
-
-          if (!insideArea(x, z)) continue;
-
-          const dx = bx - ax;
-          const dz = bz - az;
-          const length = Math.hypot(dx, dz);
-
-          if (length < 0.05) continue;
-
-          result.push({
-            x,
-            z,
-            length,
-            width: roadWidth(type),
-            angle: Math.atan2(dx, dz),
-          });
-        }
-      }
-    }
-
-    return result;
-  }, [features]);
-
-  return (
-    <group name="Paiporta Roads">
-      {segments.map((road, index) => (
-        <mesh
-          key={index}
-          position={[road.x, 0.055, road.z]}
-          rotation={[0, road.angle, 0]}
-          receiveShadow
-        >
-          <boxGeometry args={[road.width, 0.08, road.length]} />
-          <meshStandardMaterial
-            color={underground ? "#668da5" : "#263746"}
-            transparent={underground}
-            opacity={underground ? 0.18 : 1}
-            roughness={0.95}
-            depthWrite={!underground}
-          />
-        </mesh>
-      ))}
-    </group>
-  );
 }
 
 function UndergroundPreview({ visible }: { visible: boolean }) {
@@ -186,7 +111,21 @@ function CityContent({ data }: { data: GeoFeatureCollection }) {
 
       <LandCover features={data.features} underground={underground} />
 
+      <Vegetation features={data.features} underground={underground} />
+
       <Roads features={data.features} underground={underground} />
+
+      {/* <Waterways features={data.features} underground={underground} /> */}
+
+      {/*
+      TODO — UrbanFlow AI: Waterways
+
+      Water rendering is temporarily disabled because the current
+      GeoJSON representation produces incorrect overlapping surfaces.
+
+      Future implementation will use verified geographic data
+      to reconstruct the real Barranco del Poyo channel.
+  */}
 
       <Buildings features={data.features} underground={underground} />
 
@@ -194,11 +133,19 @@ function CityContent({ data }: { data: GeoFeatureCollection }) {
 
       <OrbitControls
         makeDefault
-        enableDamping
+        enableRotate
+        enableZoom
         enablePan
-        minDistance={8}
-        maxDistance={950}
-        maxPolarAngle={Math.PI / 2.02}
+        enableDamping
+        dampingFactor={0.08}
+        rotateSpeed={0.7}
+        zoomSpeed={1.0}
+        panSpeed={0.8}
+        screenSpacePanning
+        minDistance={5}
+        maxDistance={1100}
+        minPolarAngle={0}
+        maxPolarAngle={Math.PI}
         target={[0, 0, 0]}
       />
     </>
