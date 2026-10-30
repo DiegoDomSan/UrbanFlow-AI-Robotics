@@ -1,15 +1,19 @@
 """Entorno de IA: la red theta convertida en un "juego" para aprendizaje por refuerzo.
 
 Cada 5 minutos de simulación el agente:
-    - VE:      nivel de los dos depósitos, caudal de salida, apertura actual de las válvulas
-               y la lluvia de la hora actual y de las 2 horas siguientes (previsión).
+    - VE:      nivel de los dos depósitos, caudal de salida, posición de las válvulas,
+               la lluvia de la hora actual y de las 2 siguientes, y la lluvia total
+               prevista entre 3 y 12 horas después (previsión).
     - DECIDE:  cuánto abrir o cerrar cada válvula, poco a poco, en escala logarítmica
                (la apertura va de 1 % a 100 %).
     - RECIBE:  una recompensa negativa por el agua que sale por encima del límite,
-               por desbordar un depósito y por mover las válvulas bruscamente.
+               por desbordar un depósito, por mover las válvulas bruscamente y por el
+               agua que queda retenida al final de la partida.
 
-En cada partida (episodio) la tormenta es distinta: cambia su intensidad, su duración
-y la hora a la que empieza. Así el agente no se aprende una tormenta de memoria.
+En cada partida (episodio) la tormenta es distinta: cambia su intensidad, su duración y
+la hora a la que empieza. En la mitad de las partidas llega una segunda tormenta entre
+3 y 16 horas después de la primera: así el agente aprende a vaciar los depósitos a
+tiempo para dejar espacio.
 
 Este archivo solo define el entorno. Para entrenar: entrenar_ia.py
 """
@@ -21,6 +25,7 @@ import os
 os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import gymnasium as gym
@@ -36,6 +41,8 @@ PROFUNDIDAD_MAXIMA = 2.0     # m, capacidad de cada depósito
 DEPOSITOS = ["P1", "P2"]
 VALVULAS = ["1", "2"]
 TUBERIA_SALIDA = "8"
+INICIO_SIMULACION = datetime(2018, 2, 25)   # fecha de inicio del archivo theta.inp
+HORAS_SIMULACION = 78                       # la simulación de theta dura 78 horas
 
 # Tormenta original de theta: lluvia (mm/h) de cada hora a partir de la 01:00
 TORMENTA_BASE = [1.2, 2.3, 3.2, 3.1, 3.1, 2.1, 1.1, 0.1]
@@ -46,13 +53,36 @@ HORAS_DESPUES_DE_LLOVER = 12     # tiempo que se sigue simulando para vaciar los
 PESO_EXCESO = 1 / 100            # castigo por cada m³ que sale por encima del umbral
 PESO_DESBORDE = 1.0              # castigo por cada m³ desbordado (100 veces más grave)
 PESO_CAMBIO_VALVULA = 0.1        # castigo por mover las válvulas (evita oscilaciones)
+PESO_AGUA_FINAL = 1 / 100        # castigo por cada m³ que queda en los depósitos al final
 PASO_MAXIMO = 0.1                # cuánto puede mover cada válvula en una decisión (escala 0-1)
-LLUVIA_MIN, LLUVIA_MAX = 0.5, 2.0   # rango del factor de lluvia de las tormentas de entrenamiento
+LLUVIA_MIN, LLUVIA_MAX = 0.5, 2.0   # rango del factor de lluvia de las tormentas
+PROBABILIDAD_DOBLE = 0.5         # partidas con una segunda tormenta
+SEPARACION_MIN, SEPARACION_MAX = 3, 16   # horas entre el final de la 1.ª y la 2.ª tormenta
 
 # Capa de seguridad ("escudo"): si un depósito pasa de este nivel, su válvula se abre
 # gradualmente decida lo que decida la IA. Así la IA nunca puede llevar un depósito a
 # desbordarse por una mala decisión. Es como se usa la IA en sistemas críticos.
 NIVEL_SEGURIDAD = 1.9            # m (capacidad 2 m)
+
+CARPETA_TEMPORAL = Path(__file__).parent / "resultados" / "tormentas_entrenamiento"
+
+# Escala logarítmica de la válvula. Medimos que las válvulas de theta solo cambian el
+# resultado cuando están casi cerradas (por debajo del 15 %); entre el 15 y el 100 % todo
+# es casi igual. Por eso el agente no elige la apertura directamente, sino un valor de 0 a 1
+# que se traduce así:  0 -> 1 %,  0.5 -> 10 %,  1 -> 100 %.
+APERTURA_MINIMA_IA = 0.01
+TAMANO_OBSERVACION = 9
+
+
+def accion_a_apertura(accion):
+    """Valor en la escala del agente (0-1) -> apertura real de la válvula (0.01-1)."""
+    return APERTURA_MINIMA_IA ** (1.0 - np.clip(accion, 0.0, 1.0))
+
+
+def apertura_a_accion(apertura):
+    """Apertura real de la válvula (0.01-1) -> valor en la escala del agente (0-1)."""
+    apertura = np.clip(apertura, APERTURA_MINIMA_IA, 1.0)
+    return 1.0 - np.log(apertura) / np.log(APERTURA_MINIMA_IA)
 
 
 def aplicar_escudo(posicion_nueva, posicion_actual, niveles):
@@ -63,36 +93,46 @@ def aplicar_escudo(posicion_nueva, posicion_actual, niveles):
             posicion_nueva[i] = max(posicion_nueva[i], min(1.0, posicion_actual[i] + PASO_MAXIMO))
     return posicion_nueva
 
-CARPETA_TEMPORAL = Path(__file__).parent / "resultados" / "tormentas_entrenamiento"
 
-# Escala logarítmica de la válvula. Medimos que las válvulas de theta solo cambian el
-# resultado cuando están casi cerradas (por debajo del 15 %); entre el 15 y el 100 % todo
-# es casi igual. Por eso el agente no elige la apertura directamente, sino un valor de 0 a 1
-# que se traduce así:  0 -> 1 %,  0.5 -> 10 %,  1 -> 100 %.
-APERTURA_MINIMA_IA = 0.01
-
-
-def accion_a_apertura(accion):
-    """Valor que elige el agente (0-1) -> apertura real de la válvula (0.01-1)."""
-    return APERTURA_MINIMA_IA ** (1.0 - np.clip(accion, 0.0, 1.0))
+def mover_valvulas(apertura_actual, accion, niveles):
+    """Aplica la decisión del agente (cuánto mover cada válvula) y la capa de seguridad.
+    Devuelve la nueva apertura real y cuánto se han movido las válvulas."""
+    posicion = apertura_a_accion(np.asarray(apertura_actual, dtype=float))
+    movimiento = np.clip(np.asarray(accion, dtype=float), -1.0, 1.0) * PASO_MAXIMO
+    nueva = np.clip(posicion + movimiento, 0.0, 1.0)
+    nueva = aplicar_escudo(nueva, posicion, niveles)
+    return accion_a_apertura(nueva), float(np.abs(nueva - posicion).sum())
 
 
-def apertura_a_accion(apertura):
-    """Apertura real de la válvula (0.01-1) -> valor en la escala del agente (0-1)."""
-    apertura = np.clip(apertura, APERTURA_MINIMA_IA, 1.0)
-    return 1.0 - np.log(apertura) / np.log(APERTURA_MINIMA_IA)
+def construir_observacion(nivel_p1, nivel_p2, caudal, apertura, lluvia, hora):
+    """Lo que ve el agente, escalado a valores cercanos a 0-1."""
+    h = int(hora)
+
+    def lluvia_en(i):
+        return lluvia[i] if 0 <= i < len(lluvia) else 0.0
+
+    proximas_horas = sum(lluvia_en(i) for i in range(h + 3, h + 13))
+    return np.array([
+        nivel_p1 / PROFUNDIDAD_MAXIMA,
+        nivel_p2 / PROFUNDIDAD_MAXIMA,
+        min(caudal / UMBRAL_SALIDA, 10.0),
+        *apertura_a_accion(np.asarray(apertura, dtype=float)),
+        lluvia_en(h) / 5.0,
+        lluvia_en(h + 1) / 5.0,
+        lluvia_en(h + 2) / 5.0,
+        proximas_horas / 20.0,
+    ], dtype=np.float32)
 
 
 def tormenta(factor=1.0, duracion_h=8, inicio_h=1):
-    """Lluvia hora a hora (mm/h) para un día: la forma de la tormenta original,
-    estirada a 'duracion_h' horas, multiplicada por 'factor' y empezando en 'inicio_h'.
-    Con los valores por defecto se obtiene exactamente la tormenta original de theta."""
+    """Lluvia hora a hora (mm/h) durante toda la simulación: la forma de la tormenta
+    original, estirada a 'duracion_h' horas, multiplicada por 'factor' y empezando en
+    'inicio_h'. Con los valores por defecto se obtiene exactamente la tormenta de theta."""
     base = np.array(TORMENTA_BASE)
-    x_base = np.linspace(0, 1, len(base))
-    x_nueva = np.linspace(0, 1, duracion_h)
-    forma = np.interp(x_nueva, x_base, base)
-    lluvia = np.zeros(24)
-    lluvia[inicio_h:inicio_h + duracion_h] = forma * factor
+    forma = np.interp(np.linspace(0, 1, duracion_h), np.linspace(0, 1, len(base)), base)
+    lluvia = np.zeros(HORAS_SIMULACION)
+    fin = min(inicio_h + duracion_h, HORAS_SIMULACION)
+    lluvia[inicio_h:fin] = (forma * factor)[:fin - inicio_h]
     return lluvia
 
 
@@ -101,10 +141,11 @@ def escribir_red(lluvia, ruta):
     texto = Path(load_network("theta")).read_text()
     antes, despues = texto.split("[TIMESERIES]")
     resto = despues[despues.index("\n["):] if "\n[" in despues else ""
-    serie = ";;Name  Date  Time  Value\n" + "".join(
-        f"T  {h:02d}:00  {valor:.3f}\n" for h, valor in enumerate(lluvia)
-    )
-    ruta.write_text(antes + "[TIMESERIES]\n" + serie + resto)
+    lineas = []
+    for h, valor in enumerate(lluvia):
+        momento = INICIO_SIMULACION + timedelta(hours=h)
+        lineas.append(f"T  {momento:%m/%d/%Y}  {momento:%H:%M}  {valor:.3f}\n")
+    ruta.write_text(antes + "[TIMESERIES]\n;;Name  Date  Time  Value\n" + "".join(lineas) + resto)
 
 
 class EntornoDrenaje(gym.Env):
@@ -115,24 +156,29 @@ class EntornoDrenaje(gym.Env):
         self.tormenta_fija = tormenta_fija   # si se pasa, siempre se usa esta lluvia
         self.rng = np.random.default_rng(semilla)
         self.sim = None
-
-        # Lo que ve el agente (todo escalado a valores cercanos a 0-1):
-        # nivel P1, nivel P2, caudal salida, apertura V1, apertura V2,
-        # lluvia ahora, dentro de 1 h y dentro de 2 h
-        self.observation_space = spaces.Box(low=0.0, high=10.0, shape=(8,), dtype=np.float32)
+        self.observation_space = spaces.Box(low=0.0, high=10.0, shape=(TAMANO_OBSERVACION,),
+                                            dtype=np.float32)
         # Lo que decide: cuánto abrir (+) o cerrar (-) cada válvula respecto a su posición
         # actual. -1 = cerrar el máximo permitido en 5 minutos, +1 = abrir el máximo.
         self.action_space = spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32)
 
     # --- Funciones internas ---------------------------------------------------------
-    def _elegir_tormenta(self):
-        if self.tormenta_fija is not None:
-            return self.tormenta_fija
+    def _tormenta_aleatoria(self, inicio_minimo, inicio_maximo):
         return tormenta(
             factor=self.rng.uniform(LLUVIA_MIN, LLUVIA_MAX),
             duracion_h=int(self.rng.integers(4, 13)),
-            inicio_h=int(self.rng.integers(1, 6)),
+            inicio_h=int(self.rng.integers(inicio_minimo, inicio_maximo + 1)),
         )
+
+    def _elegir_tormenta(self):
+        if self.tormenta_fija is not None:
+            return self.tormenta_fija
+        lluvia = self._tormenta_aleatoria(1, 5)
+        if self.rng.random() < PROBABILIDAD_DOBLE:
+            fin_primera = int(np.nonzero(lluvia)[0].max()) + 1
+            lluvia = lluvia + self._tormenta_aleatoria(fin_primera + SEPARACION_MIN,
+                                                       fin_primera + SEPARACION_MAX)
+        return lluvia
 
     def _cerrar(self):
         if self.sim is not None:
@@ -144,16 +190,13 @@ class EntornoDrenaje(gym.Env):
     def _hora_actual(self):
         return (self.sim.current_time - self.sim.start_time).total_seconds() / 3600
 
+    def _niveles(self):
+        return [self.nodos[d].depth for d in DEPOSITOS]
+
     def _observacion(self):
-        hora = int(self._hora_actual())
-        lluvia = [self.lluvia[h] if h < len(self.lluvia) else 0.0 for h in (hora, hora + 1, hora + 2)]
-        return np.array([
-            self.nodos["P1"].depth / PROFUNDIDAD_MAXIMA,
-            self.nodos["P2"].depth / PROFUNDIDAD_MAXIMA,
-            min(self.tuberias[TUBERIA_SALIDA].flow / UMBRAL_SALIDA, 10.0),
-            *apertura_a_accion(self.apertura),
-            *(valor / 5.0 for valor in lluvia),
-        ], dtype=np.float32)
+        p1, p2 = self._niveles()
+        return construir_observacion(p1, p2, self.tuberias[TUBERIA_SALIDA].flow,
+                                     self.apertura, self.lluvia, self._hora_actual())
 
     # --- Funciones estándar de Gymnasium --------------------------------------------
     def reset(self, seed=None, options=None):
@@ -174,18 +217,12 @@ class EntornoDrenaje(gym.Env):
         self.tuberias = Links(self.sim)
         self.apertura = np.array([1.0, 1.0])
         ultima_hora_lluvia = int(np.nonzero(self.lluvia)[0].max()) + 1
-        self.horas_episodio = ultima_hora_lluvia + HORAS_DESPUES_DE_LLOVER
-        self.registro = {"exceso_m3": 0.0, "desborde_m3": 0.0}
+        self.horas_episodio = min(ultima_hora_lluvia + HORAS_DESPUES_DE_LLOVER, HORAS_SIMULACION - 1)
+        self.registro = {"exceso_m3": 0.0, "desborde_m3": 0.0, "agua_final_m3": 0.0}
         return self._observacion(), {}
 
     def step(self, accion):
-        posicion = apertura_a_accion(self.apertura)                      # escala 0-1
-        movimiento = np.clip(np.asarray(accion, dtype=float), -1.0, 1.0) * PASO_MAXIMO
-        nueva_posicion = np.clip(posicion + movimiento, 0.0, 1.0)
-        niveles = [self.nodos[d].depth for d in DEPOSITOS]
-        nueva_posicion = aplicar_escudo(nueva_posicion, posicion, niveles)
-        cambio = np.abs(nueva_posicion - posicion).sum()
-        self.apertura = accion_a_apertura(nueva_posicion)
+        self.apertura, cambio = mover_valvulas(self.apertura, accion, self._niveles())
         for valvula, valor in zip(VALVULAS, self.apertura):
             self.tuberias[valvula].target_setting = float(valor)
 
@@ -211,11 +248,17 @@ class EntornoDrenaje(gym.Env):
 
         if not terminado and self._hora_actual() >= self.horas_episodio:
             terminado = True
-        observacion = self._observacion() if not terminado else np.zeros(8, dtype=np.float32)
-        info = dict(self.registro)
         if terminado:
+            # El agua que queda en los depósitos al final cuenta como exceso futuro:
+            # así el agente aprende a vaciarlos (despacio, sin pasar del umbral).
+            agua_final = sum(self.nodos[d].volume for d in DEPOSITOS)
+            self.registro["agua_final_m3"] = agua_final
+            recompensa -= PESO_AGUA_FINAL * agua_final
+            observacion = np.zeros(TAMANO_OBSERVACION, dtype=np.float32)
             self._cerrar()
-        return observacion, float(recompensa), terminado, False, info
+        else:
+            observacion = self._observacion()
+        return observacion, float(recompensa), terminado, False, dict(self.registro)
 
     def close(self):
         self._cerrar()

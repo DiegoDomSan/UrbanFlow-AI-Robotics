@@ -112,36 +112,48 @@ python drainage-control/evaluar_ia.py           # compara sin control, reglas e 
 
 | Pieza | Detalle |
 | --- | --- |
-| Entorno (`entorno_ia.py`) | Red theta con SWMM en formato Gymnasium; una tormenta aleatoria por episodio (×0.5 a ×2, 4–12 h, inicio entre 1:00 y 5:00) |
-| Observación | Nivel P1 y P2, caudal de salida, posición de las 2 válvulas, lluvia ahora y dentro de 1 h y 2 h |
+| Entorno (`entorno_ia.py`) | Red theta con SWMM en formato Gymnasium; una tormenta aleatoria por episodio (×0.5 a ×2, 4–12 h) y, en la mitad de los episodios, una segunda tormenta entre 3 y 16 h después |
+| Observación (9 valores) | Nivel P1 y P2, caudal de salida, posición de las 2 válvulas, lluvia ahora y dentro de 1 h y 2 h, y lluvia total prevista entre 3 y 12 h después |
 | Acción | Cada 5 minutos, cuánto abrir o cerrar cada válvula (máximo 10 % del recorrido), en escala logarítmica de 1 % a 100 % |
-| Recompensa | −(exceso m³ / 100 + desborde m³ + 0.1 × movimiento de válvulas) |
+| Recompensa | −(exceso m³ / 100 + desborde m³ + 0.1 × movimiento de válvulas), y al final −(agua que queda en los depósitos m³ / 100) |
 | Capa de seguridad | Si un depósito supera 1.9 m, su válvula se abre gradualmente aunque la IA decida otra cosa |
-| Algoritmo | PPO (Stable-Baselines3), red de 2 capas de 64 neuronas, 4 simulaciones en paralelo |
+| Algoritmo | PPO (Stable-Baselines3), red de 2 capas de 64 neuronas, 4 simulaciones en paralelo, 800 000 pasos |
 
-Resultados (`python drainage-control/evaluar_ia.py`):
+Resultados (`python drainage-control/evaluar_ia.py`). Puntuación de pystorms: menor es mejor.
 
-| Lluvia | Estrategia | Puntuación | Pico de salida (m³/s) | Desborde (m³) | Movimientos de válvula |
+| Tormenta | Estrategia | Puntuación | Pico de salida (m³/s) | Desborde (m³) | Movimientos de válvula |
 | --- | --- | --- | --- | --- | --- |
 | ×1 | Sin control | 1630 | 0.69 | 0 | 0 |
-| ×1 | Reglas | **0** | 0.50 | 0 | 14.5 |
-| ×1 | IA | 489 | 0.62 | 0 | **1.5** |
+| ×1 | Reglas | **0** | **0.50** | 0 | 14.5 |
+| ×1 | IA | 272 | 0.61 | 0 | **3.8** |
 | ×1.5 | Sin control | 12 251 | 1.20 | 0 | 0 |
 | ×1.5 | Reglas | **8973** | 1.76 | 0 | 31.7 |
-| ×1.5 | IA | 10 143 | **1.19** | 0 | **2.8** |
+| ×1.5 | IA | 9736 | **1.20** | 0 | **5.0** |
 | ×2 | Sin control | 28 699 | 1.78 | 0 | 0 |
 | ×2 | Reglas | **25 380** | 2.70 | 0 | 50.8 |
-| ×2 | IA | 26 384 | 1.96 | 0 | **3.7** |
+| ×2 | IA | 25 860 | **1.78** | 0 | **4.8** |
+| Doble ×1, 6 h de separación | Sin control | 6104 | 0.84 | 0 | 0 |
+| Doble ×1, 6 h de separación | Reglas | **1596** | 0.82 | 0 | 30.8 |
+| Doble ×1, 6 h de separación | IA | 2714 | **0.79** | 0 | **7.1** |
+| Doble ×1.5, 8 h de separación | Sin control | 31 105 | 1.42 | 0 | 0 |
+| Doble ×1.5, 8 h de separación | Reglas | **24 546** | 2.10 | 0 | 73.4 |
+| Doble ×1.5, 8 h de separación | IA | 26 389 | **1.42** | 0 | **8.8** |
 
-La IA nunca desborda, mejora a no controlar en las tres tormentas y mueve las válvulas entre 10 y 14 veces menos que las reglas, que oscilan sin parar. Las reglas siguen teniendo mejor puntuación en esta red tan sencilla, pero con tormentas fuertes suben el pico de salida (2.70 m³/s con ×2) mucho más que la IA.
+La IA nunca desborda, mejora a no controlar en todas las tormentas, nunca sube el pico de salida por encima de no controlar y mueve las válvulas entre 4 y 10 veces menos que las reglas. Las reglas siguen teniendo mejor puntuación en esta red tan sencilla, pero suben el pico de salida en tormentas fuertes (2.70 m³/s con ×2).
 
-Comportamiento aprendido: la IA deja abierta la válvula de P1 y controla solo la de P2, el depósito que recibe más agua.
+**IA v2 frente a v1:** la v1 se entrenaba con una sola tormenta por episodio, veía solo 2 h de previsión y no tenía castigo por el agua final. La v2 mejora la puntuación en las cinco tormentas: −44 % con ×1, −18 % con la doble ×1, y entre −2 % y −4 % en las demás. Con ×2 baja además el pico de 1.96 a 1.78 m³/s.
+
+Comportamiento aprendido:
+
+- Controla sobre todo la válvula de P2, el depósito que recibe más agua.
+- Antes de una segunda tormenta vacía los depósitos en las horas previas: llega al pico de la segunda con unos 600 m³ guardados de 4000 posibles.
 
 Limitaciones:
 
-- **No vacía los depósitos después de la tormenta:** el episodio termina 12 h después de llover, así que no aprende a dejar espacio para la siguiente tormenta.
+- Tras la última tormenta tarda muchas horas en vaciar los depósitos.
+- La válvula 1 da pequeños saltos (entre 1 % y 3 %) en algunos momentos.
 - Solo se ha probado con tormentas de la misma forma que la original.
-- Elegimos el modelo final (800 000 pasos, con capa de seguridad) viendo estas mismas tormentas de prueba.
+- Elegimos el diseño final viendo estas mismas tormentas de prueba; lo correcto sería validar con tormentas distintas.
 
 ## Stack
 
