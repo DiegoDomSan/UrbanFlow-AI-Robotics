@@ -6,3 +6,5 @@ drainage-control/resultados/*.inp
 drainage-control/resultados/*.out
 drainage-control/resultados/*.rpt
 __pycache__/
+drainage-control/resultados/tormentas_entrenamiento/
+.DS_Store

@@ -2,10 +2,12 @@
 
 Módulo de UrbanFlow AI Robotics. Una IA controla en tiempo real compuertas, bombas y depósitos de la red de alcantarillado para reducir las inundaciones pluviales urbanas. Caso de estudio: un barrio de Valencia.
 
-## Estado actual (Sprint 1)
+## Estado actual
 
-- Simulación de una tormenta sobre el escenario de referencia `theta` de [pystorms](https://github.com/kLabUM/pystorms), sin control.
-- Línea base: **rendimiento sin control = 1630.34** (menor es mejor).
+- Escenario de referencia `theta` de [pystorms](https://github.com/kLabUM/pystorms): 2 depósitos, 2 válvulas.
+- Línea base sin control: puntuación 1630.34 (menor es mejor).
+- Control por reglas progresivo: puntuación 0 en la tormenta original.
+- Agente de IA (PPO) con capa de seguridad: nunca desborda y mueve las válvulas mucho menos que las reglas.
 
 ## Requisitos
 
@@ -31,6 +33,8 @@ Si al ejecutar aparece `zsh: killed`, macOS está bloqueando el motor SWMM por u
 find .venv -path "*swmm*" \( -name "*.so" -o -name "*.dylib" \) -exec codesign --force --sign - {} \;
 xattr -dr com.apple.quarantine .venv
 ```
+
+Los scripts de IA (`entorno_ia.py`, `entrenar_ia.py`, `evaluar_ia.py`) ajustan al principio dos variables de entorno (`KMP_DUPLICATE_LIB_OK` y `OMP_NUM_THREADS`). Sin ellas, en Mac Python se cierra con `segmentation fault`, porque SWMM y PyTorch traen cada uno su propia copia de la librería OpenMP (`libomp`).
 
 ## Uso
 
@@ -82,8 +86,8 @@ Comparamos varias reglas de seguridad con tormentas más fuertes. Abrir la válv
 | --- | --- | --- |
 | Puntuación pystorms (menor es mejor) | 1630.34 | **0.0** |
 | Volumen inundado | 0.0 m³ | 0.0 m³ |
-| Nivel máximo P1 / P2 | 0.13 / 0.48 m | 1.27 / 1.53 m |
-| Caudal máximo de salida (umbral 0.5) | 0.685 m³/s | 0.498 m³/s |
+| Nivel máximo P1 / P2 | 0.13 / 0.48 m | 1.27 / 1.52 m |
+| Caudal máximo de salida (umbral 0.5) | 0.685 m³/s | 0.497 m³/s |
 | Tiempo por encima del umbral | 3.8 h | 0.0 h |
 | Volumen por encima del umbral | 1402.8 m³ | 0.0 m³ |
 
@@ -95,8 +99,50 @@ Las reglas retienen el agua en los depósitos durante el pico y la sueltan despu
 - **Oscilan:** las válvulas abren y cierran continuamente durante el pico.
 - **Ajustadas a una sola tormenta:** falta comprobar que funcionan con otras.
 
-Son la motivación para el agente de IA de los siguientes sprints.
+Son la motivación para el agente de IA.
+
+## Agente de IA (aprendizaje por refuerzo)
+
+```bash
+python drainage-control/entrenar_ia.py          # entrena (unos 15 min, 800 000 pasos)
+python drainage-control/evaluar_ia.py           # compara sin control, reglas e IA
+```
+
+`modelos/` incluye el agente ya entrenado, así que `evaluar_ia.py` funciona sin entrenar. Al volver a entrenar en otro ordenador los resultados pueden variar un poco.
+
+| Pieza | Detalle |
+| --- | --- |
+| Entorno (`entorno_ia.py`) | Red theta con SWMM en formato Gymnasium; una tormenta aleatoria por episodio (×0.5 a ×2, 4–12 h, inicio entre 1:00 y 5:00) |
+| Observación | Nivel P1 y P2, caudal de salida, posición de las 2 válvulas, lluvia ahora y dentro de 1 h y 2 h |
+| Acción | Cada 5 minutos, cuánto abrir o cerrar cada válvula (máximo 10 % del recorrido), en escala logarítmica de 1 % a 100 % |
+| Recompensa | −(exceso m³ / 100 + desborde m³ + 0.1 × movimiento de válvulas) |
+| Capa de seguridad | Si un depósito supera 1.9 m, su válvula se abre gradualmente aunque la IA decida otra cosa |
+| Algoritmo | PPO (Stable-Baselines3), red de 2 capas de 64 neuronas, 4 simulaciones en paralelo |
+
+Resultados (`python drainage-control/evaluar_ia.py`):
+
+| Lluvia | Estrategia | Puntuación | Pico de salida (m³/s) | Desborde (m³) | Movimientos de válvula |
+| --- | --- | --- | --- | --- | --- |
+| ×1 | Sin control | 1630 | 0.69 | 0 | 0 |
+| ×1 | Reglas | **0** | 0.50 | 0 | 14.5 |
+| ×1 | IA | 489 | 0.62 | 0 | **1.5** |
+| ×1.5 | Sin control | 12 251 | 1.20 | 0 | 0 |
+| ×1.5 | Reglas | **8973** | 1.76 | 0 | 31.7 |
+| ×1.5 | IA | 10 143 | **1.19** | 0 | **2.8** |
+| ×2 | Sin control | 28 699 | 1.78 | 0 | 0 |
+| ×2 | Reglas | **25 380** | 2.70 | 0 | 50.8 |
+| ×2 | IA | 26 384 | 1.96 | 0 | **3.7** |
+
+La IA nunca desborda, mejora a no controlar en las tres tormentas y mueve las válvulas entre 10 y 14 veces menos que las reglas, que oscilan sin parar. Las reglas siguen teniendo mejor puntuación en esta red tan sencilla, pero con tormentas fuertes suben el pico de salida (2.70 m³/s con ×2) mucho más que la IA.
+
+Comportamiento aprendido: la IA deja abierta la válvula de P1 y controla solo la de P2, el depósito que recibe más agua.
+
+Limitaciones:
+
+- **No vacía los depósitos después de la tormenta:** el episodio termina 12 h después de llover, así que no aprende a dejar espacio para la siguiente tormenta.
+- Solo se ha probado con tormentas de la misma forma que la original.
+- Elegimos el modelo final (800 000 pasos, con capa de seguridad) viendo estas mismas tormentas de prueba.
 
 ## Stack
 
-Python · EPA SWMM · pyswmm · pystorms · matplotlib
+Python · EPA SWMM · pyswmm · pystorms · matplotlib · Gymnasium · Stable-Baselines3 · PyTorch
