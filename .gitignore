@@ -1,1 +1,8 @@
 .venv/
+
+# Resultados que se regeneran ejecutando los scripts
+drainage-control/resultados/*.csv
+drainage-control/resultados/*.inp
+drainage-control/resultados/*.out
+drainage-control/resultados/*.rpt
+__pycache__/
