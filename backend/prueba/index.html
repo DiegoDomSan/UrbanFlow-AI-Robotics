@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>UrbanFlow · prueba del servidor</title>
+<style>
+  :root { --fondo:#0E2433; --panel:#14303F; --borde:#24485C; --texto:#E8EEF1; --suave:#9DB3C0;
+          --azul:#4FA3E0; --naranja:#E89A5C; --rojo:#E5675C; --verde:#6CC58A; --agua:#3D8BD6; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--fondo); color:var(--texto); font:14px/1.4 system-ui, sans-serif; }
+  header { padding:12px 16px; border-bottom:1px solid var(--borde); display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
+  header h1 { font-size:16px; margin:0 12px 0 0; }
+  label { color:var(--suave); font-size:12px; display:flex; flex-direction:column; gap:2px; }
+  input, select, button { background:var(--panel); color:var(--texto); border:1px solid var(--borde); border-radius:6px; padding:6px 8px; font:inherit; }
+  input[type=number] { width:70px; }
+  button { cursor:pointer; } button:hover { border-color:var(--azul); }
+  button.principal { background:var(--azul); border-color:var(--azul); color:#06121A; font-weight:600; }
+  main { display:grid; grid-template-columns: minmax(0,1.3fr) minmax(0,1fr); gap:12px; padding:12px; }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+  .panel { background:var(--panel); border:1px solid var(--borde); border-radius:10px; padding:10px; min-width:0; }
+  .panel h2 { font-size:13px; margin:0 0 8px; color:var(--suave); text-transform:uppercase; letter-spacing:1px; }
+  canvas { width:100%; display:block; border-radius:6px; }
+  #mapa { aspect-ratio: 1 / 1; background:#0B1D29; }
+  .fila { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+  .estado { font-variant-numeric:tabular-nums; color:var(--suave); }
+  .alerta { border-left:3px solid var(--rojo); padding:6px 8px; margin:6px 0; background:#0F2736; border-radius:4px; }
+  .alerta.resuelta { border-color:var(--verde); opacity:.7; }
+  .alerta .t { font-weight:600; } .alerta .e { font-size:12px; color:var(--suave); }
+  .chip { display:inline-block; font-size:11px; padding:1px 6px; border-radius:99px; background:#24485C; margin-left:6px; }
+  #registro { max-height:260px; overflow:auto; font-size:12px; color:var(--suave); }
+  #registro div { padding:2px 0; border-bottom:1px solid #1B3A4B; }
+  .leyenda { font-size:12px; color:var(--suave); display:flex; gap:12px; flex-wrap:wrap; margin-top:6px; }
+  .leyenda span::before { content:""; display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:4px; vertical-align:-1px; background:var(--c); }
+</style>
+</head>
+<body>
+<header>
+  <h1>UrbanFlow · simulación en directo</h1>
+  <label>Lluvia ×<input id="factor" type="number" step="0.1" min="0.3" max="3" value="1.2"></label>
+  <label>Horas<input id="duracion" type="number" min="2" max="16" value="8"></label>
+  <label>2.ª tormenta (h después)<input id="separacion" type="number" min="0" max="30" placeholder="no"></label>
+  <label>Estrategia<select id="estrategia"><option value="ia">IA (PPO)</option><option value="reglas">Reglas</option><option value="sin_control">Sin control</option></select></label>
+  <label>Velocidad<input id="velocidad" type="range" min="1" max="20" value="6"></label>
+  <button class="principal" id="iniciar">Iniciar</button>
+  <button id="pausa">Pausar</button>
+  <span class="estado" id="estado">Conectando…</span>
+</header>
+<main>
+  <section class="panel">
+    <h2>Paiporta (vista desde arriba)</h2>
+    <canvas id="mapa" width="900" height="900"></canvas>
+    <div class="leyenda">
+      <span style="--c:#4FA3E0">depósito / pozo</span><span style="--c:#3D8BD6">agua en la calle</span>
+      <span style="--c:#E89A5C">robot terrestre</span><span style="--c:#FFFFFF">dron</span><span style="--c:#B98CF0">robot de tuberías</span>
+      <span style="--c:#E5675C">alerta</span>
+    </div>
+    <div class="fila" style="margin-top:10px">
+      <strong>Provocar avería:</strong>
+      <button data-averia="valvula_atascada:1">Válvula 1 atascada</button>
+      <button data-averia="valvula_atascada:2">Válvula 2 atascada</button>
+      <button data-averia="tuberia_obstruida:7">Tubería 7 obstruida</button>
+      <button data-averia="tuberia_obstruida:9">Tubería 9 obstruida</button>
+      <button data-averia="tuberia_obstruida:8">Tubería 8 obstruida</button>
+    </div>
+  </section>
+  <section style="display:flex; flex-direction:column; gap:12px; min-width:0">
+    <div class="panel">
+      <h2>Red: medido (línea) vs. gemelo digital (puntos)</h2>
+      <canvas id="grafica" width="700" height="300"></canvas>
+      <div class="estado" id="resumen"></div>
+    </div>
+    <div class="panel"><h2>Alertas</h2><div id="alertas">Sin alertas.</div></div>
+    <div class="panel"><h2>Qué está pasando</h2><div id="registro"></div></div>
+  </section>
+</main>
+<script>
+const SERVIDOR = location.origin.startsWith("http") ? location.host : "localhost:8000";
+const $ = (id) => document.getElementById(id);
+let escenario = null, ultimo = null, historia = [], pausado = false;
+
+// --- Mapa: metros (x este, z sur) -> píxeles ---
+const mapa = $("mapa"), ctx = mapa.getContext("2d");
+const LADO = 560;  // metros visibles
+const px = (x) => (x + LADO / 2) / LADO * mapa.width;
+const pz = (z) => (z + LADO / 2) / LADO * mapa.height;
+const escala = mapa.width / LADO;
+
+function dibujarMapa() {
+  if (!escenario) return;
+  ctx.clearRect(0, 0, mapa.width, mapa.height);
+  // barranco
+  ctx.strokeStyle = "#1E5A7A"; ctx.lineWidth = 6; ctx.beginPath();
+  escenario.barranco.forEach(([x, z], i) => i ? ctx.lineTo(px(x), pz(z)) : ctx.moveTo(px(x), pz(z))); ctx.stroke();
+  // agua en la calle
+  for (const zona of (ultimo?.inundacion.zonas || [])) {
+    ctx.fillStyle = `rgba(61,139,214,${Math.min(0.75, 0.25 + zona.profundidad_m)})`;
+    ctx.beginPath(); ctx.arc(px(zona.centro[0]), pz(zona.centro[1]), zona.radio_m * escala, 0, 7); ctx.fill();
+  }
+  // calles (cortadas en rojo)
+  const cortadas = new Set((ultimo?.inundacion.calles_cortadas || []).map(t => JSON.stringify(t)));
+  for (const tramo of escenario.calles) {
+    ctx.strokeStyle = cortadas.has(JSON.stringify(tramo)) ? "#E5675C" : "#3A5566";
+    ctx.lineWidth = 3; ctx.beginPath();
+    ctx.moveTo(px(tramo[0][0]), pz(tramo[0][1])); ctx.lineTo(px(tramo[1][0]), pz(tramo[1][1])); ctx.stroke();
+  }
+  // red de drenaje
+  for (const c of escenario.conexiones) {
+    ctx.strokeStyle = c.tipo === "valvula" ? "#9DD0F5" : "#4FA3E0"; ctx.lineWidth = c.tipo === "valvula" ? 5 : 4;
+    ctx.setLineDash(c.tipo === "valvula" ? [] : [10, 6]); ctx.beginPath();
+    ctx.moveTo(px(c.puntos[0][0]), pz(c.puntos[0][1])); ctx.lineTo(px(c.puntos[1][0]), pz(c.puntos[1][1])); ctx.stroke();
+  }
+  ctx.setLineDash([]);
+  for (const e of escenario.elementos) {
+    const [x, z] = e.posicion; const nivel = ultimo?.red.niveles_m[e.id];
+    ctx.fillStyle = "#4FA3E0"; ctx.beginPath();
+    if (e.tipo === "deposito") { ctx.rect(px(x) - 14, pz(z) - 14, 28, 28); } else { ctx.arc(px(x), pz(z), 8, 0, 7); }
+    ctx.fill();
+    if (e.tipo === "deposito" && nivel !== undefined) {   // nivel del depósito como barra
+      ctx.fillStyle = "#0B1D29"; ctx.fillRect(px(x) - 11, pz(z) - 11, 22, 22 * (1 - nivel / 2));
+    }
+    ctx.fillStyle = "#E8EEF1"; ctx.font = "bold 18px system-ui"; ctx.fillText(e.id === "O" ? "Salida" : e.id, px(x) + 14, pz(z) - 10);
+  }
+  // base de robots
+  const [bx, bz] = escenario.base_robots;
+  ctx.strokeStyle = "#E8EEF1"; ctx.lineWidth = 2; ctx.strokeRect(px(bx) - 16, pz(bz) - 16, 32, 32);
+  ctx.fillStyle = "#E8EEF1"; ctx.font = "16px system-ui"; ctx.fillText("Base robots", px(bx) + 20, pz(bz) + 5);
+  // alertas activas
+  for (const a of (ultimo?.alertas || []).filter(a => a.estado !== "resuelta")) {
+    const pos = posicionDe(a.elemento); if (!pos) continue;
+    ctx.strokeStyle = "#E5675C"; ctx.lineWidth = 4; ctx.beginPath(); ctx.arc(px(pos[0]), pz(pos[1]), 22, 0, 7); ctx.stroke();
+    ctx.fillStyle = "#E5675C"; ctx.font = "bold 16px system-ui"; ctx.fillText(a.id, px(pos[0]) - 10, pz(pos[1]) + 40);
+  }
+  // robots y sus rutas
+  const colores = { terrestre: "#E89A5C", dron: "#FFFFFF", tuberia: "#B98CF0" };
+  for (const r of (ultimo?.robots || [])) {
+    if (r.ruta.length > 1 && r.estado !== "en_base") {
+      ctx.strokeStyle = colores[r.tipo]; ctx.globalAlpha = 0.5; ctx.lineWidth = 2; ctx.setLineDash([4, 4]); ctx.beginPath();
+      r.ruta.forEach(([x, z], i) => i ? ctx.lineTo(px(x), pz(z)) : ctx.moveTo(px(x), pz(z))); ctx.stroke();
+      ctx.setLineDash([]); ctx.globalAlpha = 1;
+    }
+    const [x, z] = r.posicion;
+    ctx.fillStyle = colores[r.tipo]; ctx.beginPath();
+    if (r.tipo === "dron") { ctx.moveTo(px(x), pz(z) - 12); ctx.lineTo(px(x) + 10, pz(z) + 8); ctx.lineTo(px(x) - 10, pz(z) + 8); }
+    else { ctx.arc(px(x), pz(z), 9, 0, 7); }
+    ctx.fill();
+    if (r.bajo_tierra) { ctx.strokeStyle = "#B98CF0"; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(px(x), pz(z), 14, 0, 7); ctx.stroke(); }
+  }
+}
+
+function posicionDe(elemento) {
+  const e = escenario.elementos.find(e => e.id === elemento);
+  if (e) return e.posicion;
+  const c = escenario.conexiones.find(c => c.id === elemento);
+  return c ? [(c.puntos[0][0] + c.puntos[1][0]) / 2, (c.puntos[0][1] + c.puntos[1][1]) / 2] : null;
+}
+
+// --- Gráfica: niveles y caudal de salida ---
+const grafica = $("grafica"), g = grafica.getContext("2d");
+function dibujarGrafica() {
+  g.clearRect(0, 0, grafica.width, grafica.height);
+  if (!historia.length) return;
+  const W = grafica.width, H = grafica.height, maxH = Math.max(historia.at(-1).hora, 6);
+  const x = (h) => 40 + (h / maxH) * (W - 50);
+  const yNivel = (v) => H / 2 - 10 - (v / 2) * (H / 2 - 30);
+  const yCaudal = (v) => H - 20 - Math.min(v, 2.5) / 2.5 * (H / 2 - 30);
+  g.fillStyle = "#9DB3C0"; g.font = "12px system-ui";
+  g.fillText("Nivel depósitos (0–2 m)", 44, 14); g.fillText("Caudal de salida (m³/s)", 44, H / 2 + 14);
+  g.strokeStyle = "#E5675C"; g.setLineDash([5, 4]); g.beginPath(); g.moveTo(40, yCaudal(0.5)); g.lineTo(W - 10, yCaudal(0.5)); g.stroke(); g.setLineDash([]);
+  const linea = (f, color, punteada) => {
+    g.strokeStyle = color; g.lineWidth = 2; g.setLineDash(punteada ? [2, 3] : []); g.beginPath();
+    historia.forEach((p, i) => i ? g.lineTo(x(p.hora), f(p)) : g.moveTo(x(p.hora), f(p))); g.stroke(); g.setLineDash([]);
+  };
+  linea(p => yNivel(p.red.gemelo.niveles_m.P1), "#4FA3E0", true); linea(p => yNivel(p.red.niveles_m.P1), "#4FA3E0");
+  linea(p => yNivel(p.red.gemelo.niveles_m.P2), "#E89A5C", true); linea(p => yNivel(p.red.niveles_m.P2), "#E89A5C");
+  linea(p => yCaudal(p.red.gemelo.caudales_m3s["8"]), "#6CC58A", true); linea(p => yCaudal(p.salida.caudal_m3s), "#6CC58A");
+  g.fillStyle = "#4FA3E0"; g.fillText("P1", W - 60, 14); g.fillStyle = "#E89A5C"; g.fillText("P2", W - 36, 14);
+}
+
+function pintarAlertas() {
+  const alertas = (ultimo?.alertas || []).slice().reverse();
+  $("alertas").innerHTML = alertas.length ? alertas.map(a => `
+    <div class="alerta ${a.estado === "resuelta" ? "resuelta" : ""}">
+      <div class="t">${a.id} · ${a.titulo}<span class="chip">${a.estado}</span></div>
+      <div class="e">${a.historial.at(-1).texto}</div>
+    </div>`).join("") : "Sin alertas.";
+}
+
+function anotar(hora, texto) {
+  const div = document.createElement("div");
+  div.textContent = `${hora.toFixed(2)} h · ${texto}`;
+  $("registro").prepend(div);
+}
+
+// --- Conexión con el servidor ---
+let ws;
+function conectar() {
+  ws = new WebSocket(`ws://${SERVIDOR}/ws/simulacion`);
+  ws.onopen = () => $("estado").textContent = "Conectado. Elige una tormenta e inicia.";
+  ws.onclose = () => { $("estado").textContent = "Desconectado. Reintentando…"; setTimeout(conectar, 1500); };
+  ws.onmessage = (evento) => {
+    const m = JSON.parse(evento.data);
+    if (m.tipo === "inicio") { historia = []; $("registro").innerHTML = ""; anotar(0, `Empieza: lluvia ×${m.tormenta.factor}, estrategia ${m.estrategia}`); }
+    else if (m.tipo === "paso") {
+      ultimo = m; historia.push(m);
+      m.eventos.forEach(e => anotar(m.hora, e));
+      m.decisiones.forEach(d => d.razonamiento.forEach(r => anotar(m.hora, "   · " + r)));
+      $("estado").textContent = `Hora ${m.hora.toFixed(1)} · lluvia ${m.lluvia_mm_h.toFixed(1)} mm/h · ${Math.round(m.progreso * 100)} %`;
+      $("resumen").textContent = `Salida ${m.salida.caudal_m3s.toFixed(2)} m³/s (límite 0.5) · Válvulas ${m.red.apertura_ordenada.map(a => Math.round(a * 100) + " %").join(" / ")} · Agua por encima del límite: ${m.metricas.exceso_total_m3} m³`;
+      dibujarMapa(); dibujarGrafica(); pintarAlertas();
+    }
+    else if (m.tipo === "fin") $("estado").textContent = `Terminado · agua por encima del límite: ${m.metricas.exceso_total_m3} m³`;
+    else if (m.tipo === "averia_provocada") anotar(ultimo?.hora || 0, `[Tú] Provocas una avería en ${m.averia.elemento}. ¿La detectará el sistema?`);
+    else if (m.tipo === "error") anotar(ultimo?.hora || 0, "Error: " + m.mensaje);
+  };
+}
+
+$("iniciar").onclick = () => {
+  const separacion = $("separacion").value;
+  ws.send(JSON.stringify({ accion: "iniciar", estrategia: $("estrategia").value,
+    tormenta: { factor: +$("factor").value, duracion_h: +$("duracion").value, separacion_h: separacion === "" ? null : +separacion },
+    pasos_por_segundo: +$("velocidad").value }));
+  pausado = false; $("pausa").textContent = "Pausar";
+};
+$("pausa").onclick = () => { pausado = !pausado; ws.send(JSON.stringify({ accion: pausado ? "pausar" : "reanudar" })); $("pausa").textContent = pausado ? "Reanudar" : "Pausar"; };
+$("velocidad").oninput = () => ws?.send(JSON.stringify({ accion: "velocidad", pasos_por_segundo: +$("velocidad").value }));
+document.querySelectorAll("[data-averia]").forEach(b => b.onclick = () => {
+  const [tipo, elemento] = b.dataset.averia.split(":");
+  ws.send(JSON.stringify({ accion: "provocar_averia", tipo, elemento, ...(tipo === "valvula_atascada" ? { apertura: 0.01 } : {}) }));
+});
+
+fetch(`http://${SERVIDOR}/api/escenario`).then(r => r.json()).then(d => { escenario = d; dibujarMapa(); });
+conectar();
+</script>
+</body>
+</html>

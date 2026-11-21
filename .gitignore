@@ -8,3 +8,7 @@ drainage-control/resultados/*.rpt
 __pycache__/
 drainage-control/resultados/tormentas_entrenamiento/
 .DS_Store
+
+# Backend
+backend/temporal/
+.stale/
