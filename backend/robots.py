@@ -145,8 +145,9 @@ class Despacho:
     def __init__(self, ciudad):
         self.ciudad = ciudad
         base = ciudad.base_robots
-        self.robots = [Robot("terrestre-1", "terrestre", base), Robot("dron-1", "dron", base),
-                       Robot("tuberia-1", "tuberia", base)]
+        self.robots = [Robot("terrestre-1", "terrestre", base),
+                       Robot("dron-1", "dron", base), Robot("dron-2", "dron", base),
+                       Robot("tuberia-1", "tuberia", base)]       
         self.decisiones = []   # registro de cada decisión con su razonamiento
 
     def libre(self, tipo):
