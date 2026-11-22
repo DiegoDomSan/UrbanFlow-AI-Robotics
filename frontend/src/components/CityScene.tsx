@@ -11,6 +11,7 @@ import { UrbanDetails } from '../city/layers/UrbanDetails';
 import { EnvironmentLighting } from '../city/environment/EnvironmentLighting';
 import { CityNavigation } from '../city/scene/CityNavigation';
 import { RobotScene } from '../robotics/RobotScene';
+import { StormWeather } from '../storm/StormWeather';
 import { InspectionRenderer } from '../city/scene/InspectionRenderer';
 import type { TerrainModel } from '../city/terrain/terrainHeight';
 import { DrainageNetwork } from '../city/drainage/DrainageNetwork';
@@ -46,6 +47,7 @@ function CityContent({data,terrain,network}:Props) {
     <DrainageNetwork network={network} underground={underground} visible={visible} fill={fill}
       highlightCollectors={highlight} selectedId={selected} onSelect={select} showWater={showWater} night={night}/>
     <RobotScene />
+    <StormWeather />
     <CityNavigation network={network}/>
     <InspectionRenderer inspect={underground&&visible}/>
   </>;
