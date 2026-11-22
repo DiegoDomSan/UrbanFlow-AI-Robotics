@@ -1,212 +1,56 @@
 import { useEffect, useMemo } from "react";
 import * as THREE from "three";
+import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
+import type { TerrainModel } from "../terrain/terrainHeight";
 
-import type { GeoFeature, Position } from "../geo/geojsonTypes";
+import type { GeoFeature } from "../geo/geojsonTypes";
+import { getRoadLines, roadSideOffsets, getRoadHeight } from "../geo/roadGeometry";
 
-import { toWorld } from "../geo/projection";
-import { CITY_CONFIG, TERRAIN } from "../geo/constants";
+import { TERRAIN } from "../geo/constants";
 
 interface RoadsProps {
   features: GeoFeature[];
   underground: boolean;
+  terrain: TerrainModel;
 }
 
-function roadWidth(type: string): number {
-  const widths: Record<string, number> = {
-    primary: 11,
-    secondary: 9,
-    tertiary: 8,
-    residential: 6,
-    living_street: 5,
-    service: 4,
-    pedestrian: 4,
-    footway: 2,
-    cycleway: 2,
-  };
-
-  return widths[type] ?? 5;
-}
-
-// --------------------------------------------------
-// 1. ROAD CLIPPING
-// --------------------------------------------------
-
-function getRoadClipLimit(width: number): number {
-  const halfSize = CITY_CONFIG.sizeMeters / 2;
-
-  // Maximum possible miter extension:
-  // halfWidth * 2.5
-  const safetyMargin = (width / 2) * 2.5 + 0.02;
-
-  return halfSize - safetyMargin;
-}
-
-function clipSegment(
-  a: THREE.Vector2,
-  b: THREE.Vector2,
-  limit: number,
-): [THREE.Vector2, THREE.Vector2] | null {
-  const dx = b.x - a.x;
-  const dz = b.y - a.y;
-
-  let t0 = 0;
-  let t1 = 1;
-
-  const p = [-dx, dx, -dz, dz];
-
-  const q = [a.x + limit, limit - a.x, a.y + limit, limit - a.y];
-
-  for (let i = 0; i < 4; i++) {
-    if (Math.abs(p[i]) < 1e-10) {
-      if (q[i] < 0) return null;
-      continue;
-    }
-
-    const t = q[i] / p[i];
-
-    if (p[i] < 0) {
-      t0 = Math.max(t0, t);
-    } else {
-      t1 = Math.min(t1, t);
-    }
-
-    if (t0 > t1) return null;
-  }
-
-  return [
-    new THREE.Vector2(a.x + t0 * dx, a.y + t0 * dz),
-    new THREE.Vector2(a.x + t1 * dx, a.y + t1 * dz),
-  ];
-}
-
-function clipPolyline(
+export function createRoadGeometryFromPoints(
   points: THREE.Vector2[],
   width: number,
-): THREE.Vector2[][] {
-  if (points.length < 2) return [];
-
-  const limit = getRoadClipLimit(width);
-  const result: THREE.Vector2[][] = [];
-
-  let current: THREE.Vector2[] = [];
-
-  for (let i = 0; i < points.length - 1; i++) {
-    const clipped = clipSegment(points[i], points[i + 1], limit);
-
-    if (!clipped) {
-      if (current.length >= 2) {
-        result.push(current);
-      }
-
-      current = [];
-      continue;
-    }
-
-    const [start, end] = clipped;
-    const last = current[current.length - 1];
-
-    if (last && last.distanceTo(start) < 0.001) {
-      if (last.distanceTo(end) > 0.001) {
-        current.push(end);
-      }
-    } else {
-      if (current.length >= 2) {
-        result.push(current);
-      }
-
-      current = [start, end];
-    }
-  }
-
-  if (current.length >= 2) {
-    result.push(current);
-  }
-
-  return result;
-}
-
-// --------------------------------------------------
-// 2. ROAD MESH GENERATION
-// --------------------------------------------------
-
-function createRoadGeometryFromPoints(
-  points: THREE.Vector2[],
-  width: number,
+  terrain: TerrainModel,
+  crossing: boolean,
 ): THREE.BufferGeometry | null {
   if (points.length < 2) return null;
 
-  const halfWidth = width / 2;
-
   const vertices: number[] = [];
   const indices: number[] = [];
+  const offsets = roadSideOffsets(points.map(p => [p.x, p.y]), width).map(p => new THREE.Vector2(...p));
 
-  const offsets: THREE.Vector2[] = [];
-
-  for (let i = 0; i < points.length; i++) {
-    const previous = points[Math.max(0, i - 1)];
-    const current = points[i];
-    const next = points[Math.min(points.length - 1, i + 1)];
-
-    const incoming = current.clone().sub(previous);
-    const outgoing = next.clone().sub(current);
-
-    if (incoming.lengthSq() > 0) incoming.normalize();
-    if (outgoing.lengthSq() > 0) outgoing.normalize();
-
-    let direction: THREE.Vector2;
-
-    if (i === 0) {
-      direction = outgoing.clone();
-    } else if (i === points.length - 1) {
-      direction = incoming.clone();
-    } else {
-      direction = incoming.clone().add(outgoing);
-
-      if (direction.lengthSq() < 0.000001) {
-        direction = outgoing.clone();
+  // Keep the original miter envelope; densify its interior so tracks follow banks.
+  // Paved crossings keep the original deck elevation instead of diving into water.
+  const columns = Math.max(1, Math.ceil(width / 2));
+  let row = 0;
+  for (let segment = 0; segment < points.length - 1; segment++) {
+    const steps = Math.max(1, Math.ceil(points[segment].distanceTo(points[segment + 1]) / 2));
+    for (let step = segment === 0 ? 0 : 1; step <= steps; step++) {
+      const t = step / steps;
+      const p = points[segment].clone().lerp(points[segment + 1], t);
+      const offset = offsets[segment].clone().lerp(offsets[segment + 1], t);
+      for (let column = 0; column <= columns; column++) {
+        const across = 1 - 2 * column / columns;
+        const x = p.x + offset.x * across, z = p.y + offset.y * across;
+        const y = getRoadHeight(terrain, x, z, { bridge: crossing });
+        vertices.push(x, y, z);
       }
-
-      direction.normalize();
-    }
-
-    // Perpendicular direction.
-    const normal = new THREE.Vector2(-direction.y, direction.x);
-
-    // Miter joint for smoother road curves.
-    let scale = halfWidth;
-
-    if (i > 0 && i < points.length - 1) {
-      const incomingNormal = new THREE.Vector2(-incoming.y, incoming.x);
-
-      const denominator = normal.dot(incomingNormal);
-
-      if (Math.abs(denominator) > 0.1) {
-        scale = Math.min(halfWidth / Math.abs(denominator), halfWidth * 2.5);
+      if (row > 0) {
+        for (let column = 0; column < columns; column++) {
+          const a = (row - 1) * (columns + 1) + column;
+          const b = a + 1, c = a + columns + 1, d = c + 1;
+          indices.push(a, c, b, b, c, d); // Y-up winding.
+        }
       }
+      row++;
     }
-
-    offsets.push(normal.multiplyScalar(scale));
-  }
-
-  // Two vertices per point.
-  for (let i = 0; i < points.length; i++) {
-    const point = points[i];
-    const offset = offsets[i];
-
-    vertices.push(point.x + offset.x, TERRAIN.roadCenterY, point.y + offset.y);
-
-    vertices.push(point.x - offset.x, TERRAIN.roadCenterY, point.y - offset.y);
-  }
-
-  // Road surface triangles.
-  for (let i = 0; i < points.length - 1; i++) {
-    const a = i * 2;
-    const b = a + 1;
-    const c = a + 2;
-    const d = a + 3;
-
-    indices.push(a, b, c);
-    indices.push(b, d, c);
   }
 
   const geometry = new THREE.BufferGeometry();
@@ -222,104 +66,72 @@ function createRoadGeometryFromPoints(
   return geometry;
 }
 
-// --------------------------------------------------
-// 3. COMPLETE ROAD GEOMETRY
-// --------------------------------------------------
-
-function createRoadGeometry(
-  coordinates: Position[],
-  width: number,
-): THREE.BufferGeometry[] {
-  // Convert GPS coordinates into local meters.
-  const points: THREE.Vector2[] = [];
-
-  for (const coordinate of coordinates) {
-    const [x, z] = toWorld(coordinate);
-
-    const point = new THREE.Vector2(x, z);
-
-    if (
-      points.length === 0 ||
-      point.distanceTo(points[points.length - 1]) > 0.05
-    ) {
-      points.push(point);
-    }
-  }
-
-  if (points.length < 2) return [];
-
-  // Clip road centerline against city boundaries.
-  const clippedLines = clipPolyline(points, width);
-
-  const geometries: THREE.BufferGeometry[] = [];
-
-  for (const line of clippedLines) {
-    const geometry = createRoadGeometryFromPoints(line, width);
-
-    if (geometry) {
-      geometries.push(geometry);
-    }
-  }
-
-  return geometries;
+function mergeAndRelease(parts: THREE.BufferGeometry[]): THREE.BufferGeometry | null {
+  if (parts.length === 0) return null;
+  const merged = mergeGeometries(parts);
+  parts.forEach((geometry) => geometry.dispose());
+  return merged;
 }
 
-// --------------------------------------------------
-// 4. ROADS COMPONENT
-// --------------------------------------------------
-
-export function Roads({ features, underground }: RoadsProps) {
-  const roads = useMemo(() => {
-    const result: THREE.BufferGeometry[] = [];
-
-    for (const feature of features) {
-      const highway = feature.properties?.highway;
-
-      if (typeof highway !== "string" || !feature.geometry) {
-        continue;
-      }
-
-      const geometry = feature.geometry;
-
-      const lines =
-        geometry.type === "LineString"
-          ? [geometry.coordinates]
-          : geometry.type === "MultiLineString"
-            ? geometry.coordinates
-            : [];
-
-      const width = roadWidth(highway);
-
-      for (const line of lines) {
-        const roadGeometries = createRoadGeometry(line, width);
-
-        result.push(...roadGeometries);
+function crossingDetails(points: THREE.Vector2[], width: number, terrain: TerrainModel): THREE.BufferGeometry[] {
+  const result: THREE.BufferGeometry[] = [];
+  for (let i = 1; i < points.length; i++) {
+    const a = points[i - 1], b = points[i];
+    const count = Math.max(1, Math.ceil(a.distanceTo(b) / 2));
+    for (let j = 0; j < count; j++) {
+      const start = a.clone().lerp(b, j / count), end = a.clone().lerp(b, (j + 1) / count);
+      const center = start.clone().add(end).multiplyScalar(0.5);
+      if (terrain.getTerrainHeight(center.x, center.y) >= -0.22) continue;
+      const length = start.distanceTo(end), dx = end.x - start.x, dz = end.y - start.y;
+      const angle = -Math.atan2(dz, dx);
+      // A solid deck + continuous low parapets, without pillars obstructing the channel.
+      const deck = new THREE.BoxGeometry(length + 0.01, 0.32, width);
+      deck.rotateY(angle);
+      deck.translate(center.x, TERRAIN.roadCenterY - 0.18, center.y);
+      result.push(deck);
+      for (const side of [-1, 1]) {
+        const rail = new THREE.BoxGeometry(length + 0.01, 0.65, 0.15);
+        rail.rotateY(angle);
+        rail.translate(center.x - dz / length * width / 2 * side,
+          TERRAIN.roadCenterY + 0.325, center.y + dx / length * width / 2 * side);
+        result.push(rail);
       }
     }
+  }
+  return result;
+}
 
-    return result;
-  }, [features]);
+export function Roads({ features, underground, terrain }: RoadsProps) {
+  const roads = useMemo(() => {
+    const surfaces: THREE.BufferGeometry[] = [], paths: THREE.BufferGeometry[] = [], crossings: THREE.BufferGeometry[] = [];
+    for (const road of getRoadLines(features)) {
+      const points = road.points.map(p => new THREE.Vector2(...p));
+      const surface = createRoadGeometryFromPoints(points, road.width, terrain, road.bridge);
+      if (surface) (['track', 'path'].includes(road.highway) ? paths : surfaces).push(surface);
+      if (road.bridge) crossings.push(...crossingDetails(points, road.width, terrain));
+    }
+    return { surface: mergeAndRelease(surfaces), paths: mergeAndRelease(paths), crossing: mergeAndRelease(crossings) };
+  }, [features, terrain]);
 
-  useEffect(() => {
-    return () => {
-      roads.forEach((geometry) => geometry.dispose());
-    };
+  useEffect(() => () => {
+    roads.surface?.dispose(); roads.paths?.dispose(); roads.crossing?.dispose();
   }, [roads]);
 
   return (
     <group name="Paiporta Roads">
-      {roads.map((geometry, index) => (
-        <mesh key={index} geometry={geometry} receiveShadow>
-          <meshStandardMaterial
-            color={underground ? "#668da5" : "#263746"}
-            transparent={underground}
-            opacity={underground ? 0.18 : 1}
-            roughness={0.95}
-            depthWrite={!underground}
-            side={THREE.DoubleSide}
-          />
-        </mesh>
-      ))}
+      {roads.surface && <mesh geometry={roads.surface} receiveShadow={!underground}>
+        <meshStandardMaterial key={underground ? "xray" : "solid"} color={underground ? "#668da5" : "#344654"}
+          transparent={underground} opacity={underground ? 0.15 : 1}
+          roughness={0.95} depthWrite={!underground} side={THREE.DoubleSide} />
+      </mesh>}
+      {roads.paths && <mesh geometry={roads.paths} receiveShadow={!underground}>
+        <meshStandardMaterial key={underground ? "path-xray" : "path-solid"} color="#998b70" transparent={underground}
+          opacity={underground ? 0.1 : 1} roughness={1} depthWrite={!underground} side={THREE.DoubleSide} />
+      </mesh>}
+      {roads.crossing && <mesh geometry={roads.crossing} castShadow={!underground} receiveShadow={!underground}>
+        <meshStandardMaterial key={underground ? "xray" : "solid"} color="#a7b3b6" transparent={underground}
+          opacity={underground ? 0.12 : 1} depthWrite={!underground} roughness={0.92} />
+      </mesh>}
     </group>
   );
 }

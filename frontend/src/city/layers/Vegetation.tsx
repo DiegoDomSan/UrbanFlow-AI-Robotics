@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
+import type { TerrainModel } from "../terrain/terrainHeight";
 
 import type { GeoFeature, Position } from "../geo/geojsonTypes";
 
@@ -9,6 +10,7 @@ import { CITY_CONFIG } from "../geo/constants";
 interface VegetationProps {
   features: GeoFeature[];
   underground: boolean;
+  terrain: TerrainModel;
 }
 
 type Point2D = { x: number; z: number };
@@ -118,7 +120,7 @@ function seededRandom(seed: number): () => number {
   };
 }
 
-function generateTrees(features: GeoFeature[]): Tree[] {
+function generateTrees(features: GeoFeature[], terrain: TerrainModel): Tree[] {
   const trees: Tree[] = [];
   const buildings: PolygonArea[] = [];
   const greenAreas: PolygonArea[] = [];
@@ -175,6 +177,8 @@ function generateTrees(features: GeoFeature[]): Tree[] {
   function addTree(point: Point2D): void {
     if (trees.length >= MAX_TREES) return;
     if (!inBounds(point)) return;
+    // No decorative crowns or trunks in the excavated channel.
+    if (terrain.getTerrainHeight(point.x, point.z) < -0.25) return;
 
     if (buildings.some((polygon) => pointInPolygon(point, polygon))) {
       return;
@@ -295,8 +299,8 @@ function generateTrees(features: GeoFeature[]): Tree[] {
   return trees;
 }
 
-export function Vegetation({ features, underground }: VegetationProps) {
-  const trees = useMemo(() => generateTrees(features), [features]);
+export function Vegetation({ features, underground, terrain }: VegetationProps) {
+  const trees = useMemo(() => generateTrees(features, terrain), [features, terrain]);
 
   const trunksRef = useRef<THREE.InstancedMesh>(null);
   const crownsRef = useRef<THREE.InstancedMesh>(null);
@@ -313,8 +317,9 @@ export function Vegetation({ features, underground }: VegetationProps) {
 
     trees.forEach((tree, index) => {
       const trunkHeight = tree.height * 0.55;
+      const base = terrain.getTerrainHeight(tree.x, tree.z);
 
-      object.position.set(tree.x, trunkHeight / 2, tree.z);
+      object.position.set(tree.x, base + trunkHeight / 2, tree.z);
 
       object.rotation.set(0, 0, 0);
       object.scale.set(1, trunkHeight, 1);
@@ -324,7 +329,7 @@ export function Vegetation({ features, underground }: VegetationProps) {
 
       object.position.set(
         tree.x,
-        trunkHeight + tree.crownRadius * 0.45,
+        base + trunkHeight + tree.crownRadius * 0.45,
         tree.z,
       );
 
@@ -350,7 +355,7 @@ export function Vegetation({ features, underground }: VegetationProps) {
 
     trunks.computeBoundingSphere();
     crowns.computeBoundingSphere();
-  }, [trees]);
+  }, [trees, terrain, underground]);
 
   if (underground || trees.length === 0) {
     return null;
