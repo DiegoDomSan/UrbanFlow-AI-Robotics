@@ -10,6 +10,7 @@ import { Terrain } from '../city/terrain/Terrain';
 import { UrbanDetails } from '../city/layers/UrbanDetails';
 import { EnvironmentLighting } from '../city/environment/EnvironmentLighting';
 import { CityNavigation } from '../city/scene/CityNavigation';
+import { RobotScene } from '../robotics/RobotScene';
 import { InspectionRenderer } from '../city/scene/InspectionRenderer';
 import type { TerrainModel } from '../city/terrain/terrainHeight';
 import { DrainageNetwork } from '../city/drainage/DrainageNetwork';
@@ -44,6 +45,7 @@ function CityContent({data,terrain,network}:Props) {
     <Waterways terrain={terrain} depth={depth} underground={underground}/>
     <DrainageNetwork network={network} underground={underground} visible={visible} fill={fill}
       highlightCollectors={highlight} selectedId={selected} onSelect={select} showWater={showWater} night={night}/>
+    <RobotScene />
     <CityNavigation network={network}/>
     <InspectionRenderer inspect={underground&&visible}/>
   </>;
