@@ -11,12 +11,12 @@ export function useCityData() {
 
     async function loadCity() {
       try {
-        const response = await fetch("/data/paiporta.geojson", {
+        const response = await fetch(`${import.meta.env.BASE_URL}data/paiporta.geojson`, {
           signal: controller.signal,
         });
 
         if (!response.ok) {
-          throw new Error(`Error HTTP: ${response.status}`);
+          throw new Error(`HTTP error: ${response.status}`);
         }
 
         const json: unknown = await response.json();
@@ -30,7 +30,7 @@ export function useCityData() {
           !Array.isArray(json.features)
         ) {
           throw new Error(
-            "El archivo no es un GeoJSON FeatureCollection válido",
+            "The file is not a valid GeoJSON FeatureCollection",
           );
         }
 
@@ -40,7 +40,7 @@ export function useCityData() {
         }
       } catch (err) {
         if (!controller.signal.aborted) {
-          setError(err instanceof Error ? err.message : "Error desconocido");
+          setError(err instanceof Error ? err.message : "Unknown error");
         }
       } finally {
         if (!controller.signal.aborted) {

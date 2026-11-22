@@ -1,106 +1,46 @@
-import { useEffect, useMemo } from "react";
-import * as THREE from "three";
+import { useEffect, useMemo } from 'react';
+import { useFrame } from '@react-three/fiber';
+import * as THREE from 'three';
+import type { TerrainModel } from '../terrain/terrainHeight';
+import { buildWaterGeometry } from '../terrain/waterGeometry';
 
-import type { GeoFeature, Position } from "../geo/geojsonTypes";
-
-import { createPolygonShape } from "../geo/geometry";
-
-interface WaterwaysProps {
-  features: GeoFeature[];
-  underground: boolean;
+/** One lightweight material; animated highlights never move water beyond clipped banks. */
+export function Waterways({ terrain, depth, underground }: { terrain: TerrainModel; depth: number; underground: boolean }) {
+  const geometry = useMemo(() => buildWaterGeometry(terrain, depth), [terrain, depth]);
+  const material = useMemo(() => new THREE.ShaderMaterial({
+    transparent: true,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+    uniforms: { time: { value: 0 }, opacity: { value: .78 } },
+    vertexShader: `
+      attribute float waterDepth;
+      varying vec3 worldPosition;
+      varying float depth;
+      void main() {
+        worldPosition = (modelMatrix * vec4(position, 1.0)).xyz;
+        depth = waterDepth;
+        gl_Position = projectionMatrix * viewMatrix * vec4(worldPosition, 1.0);
+      }`,
+    fragmentShader: `
+      uniform float time;
+      uniform float opacity;
+      varying vec3 worldPosition;
+      varying float depth;
+      void main() {
+        float calm = 1.0 / (1.0 + depth * .55);
+        float wave = sin(worldPosition.x * .65 + worldPosition.z * .23 - time * .9) * sin(worldPosition.z * .88 + time * .55);
+        vec3 base = mix(vec3(.12,.49,.48), vec3(.06,.27,.37), clamp(depth / 3.5, 0.0, 1.0));
+        float shimmer = pow(max(0.0, wave), 8.0) * .16 * calm;
+        float edge = smoothstep(0.0, .12, depth);
+        gl_FragColor = vec4(base + shimmer, opacity * mix(.45, 1.0, edge));
+        #include <tonemapping_fragment>
+        #include <colorspace_fragment>
+      }`,
+  }), []);
+  useEffect(() => { material.uniforms.opacity.value = underground ? .36 : .78; }, [material, underground]);
+  useFrame((_, delta) => { material.uniforms.time.value += Math.min(delta, .05); });
+  useEffect(() => () => geometry.dispose(), [geometry]);
+  useEffect(() => () => material.dispose(), [material]);
+  if (depth <= 0) return null;
+  return <mesh name="Mapped ravine · demonstration water" geometry={geometry} material={material} renderOrder={underground ? 4 : 1} />;
 }
-
-const WATER_Y = 0.085;
-
-function createWaterGeometry(rings: Position[][]): THREE.ShapeGeometry | null {
-  const shape = createPolygonShape(rings);
-
-  if (!shape) return null;
-
-  const geometry = new THREE.ShapeGeometry(shape);
-
-  geometry.rotateX(-Math.PI / 2);
-  geometry.translate(0, WATER_Y, 0);
-
-  return geometry;
-}
-
-export function Waterways({ features, underground }: WaterwaysProps) {
-  const geometries = useMemo(() => {
-    const result: THREE.ShapeGeometry[] = [];
-
-    for (const feature of features) {
-      const geometry = feature.geometry;
-      const properties = feature.properties ?? {};
-
-      if (!geometry) continue;
-
-      const isWater =
-        properties.natural === "water" || properties.waterway === "riverbank";
-
-      if (!isWater) continue;
-
-      if (geometry.type !== "Polygon" && geometry.type !== "MultiPolygon") {
-        continue;
-      }
-
-      const polygons =
-        geometry.type === "Polygon"
-          ? [geometry.coordinates]
-          : geometry.coordinates;
-
-      for (const polygon of polygons) {
-        const waterGeometry = createWaterGeometry(polygon);
-
-        if (waterGeometry) {
-          result.push(waterGeometry);
-        }
-      }
-    }
-
-    return result;
-  }, [features]);
-
-  useEffect(() => {
-    return () => {
-      geometries.forEach((geometry) => geometry.dispose());
-    };
-  }, [geometries]);
-
-  if (underground) return null;
-
-  return (
-    <group name="OSM Waterways">
-      {geometries.map((geometry, index) => (
-        <mesh key={index} geometry={geometry}>
-          <meshStandardMaterial
-            color="#368dad"
-            roughness={0.65}
-            metalness={0}
-            side={THREE.DoubleSide}
-          />
-        </mesh>
-      ))}
-    </group>
-  );
-}
-
-/*
- * TODO — UrbanFlow AI: Waterways
- *
- * Water surfaces are rendered using the original polygon
- * geometries provided by OpenStreetMap.
- *
- * No artificial river width, riverbed depth, or water level
- * is generated.
- *
- * Future improvements:
- * - Implement the real channel geometry using elevation data.
- * - Connect water levels to the flood simulation.
- * - Distinguish dry riverbeds from actual water surfaces.
- * - Clip geometries to the digital twin boundaries.
- *
- * IMPORTANT:
- * The current visualization represents OSM water polygons,
- * not a validated hydraulic or terrain model.
- */

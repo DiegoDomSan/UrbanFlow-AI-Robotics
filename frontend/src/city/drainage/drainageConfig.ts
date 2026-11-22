@@ -1,0 +1,15 @@
+export const DRAINAGE_CONFIG = {
+  seed: 20261106,
+  maxManholeSpacing: 48,
+  collectorDiameter: [0.8, 1.2] as const,
+  secondaryDiameter: [0.3, 0.6] as const,
+  gravityGradient: 0.0012,
+  minGradient: 0.001,
+  maxGradient: 0.03,
+  maxCatchmentPath: 500,
+  minimumCover: 0.9,
+  buildingClearance: 0.7,
+  channelSetback: 17,
+  outletElevation: -2.85,
+  defaultFillPercentage: 35,
+} as const;
