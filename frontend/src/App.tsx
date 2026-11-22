@@ -10,7 +10,7 @@ import './style.css';
 import { RobotMapControls } from './robotics/RobotScene';
 import { buildRoboticsWorld } from './robotics/navigation';
 import { useRoboticsStore } from './robotics/useRoboticsStore';
-import { StormStatus } from './storm/StormPanel';
+import { StormStatus } from './storm/StormStatus';
 import { StormRuntime } from './storm/StormRuntime';
 const RobotWorkshop = lazy(() => import('./robotics/RobotWorkshop').then(({ RobotWorkshop }) => ({ default: RobotWorkshop })));
 const StormPanel = lazy(() => import('./storm/StormPanel').then(({ StormPanel }) => ({ default: StormPanel })));
