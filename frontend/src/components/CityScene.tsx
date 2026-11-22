@@ -1,220 +1,61 @@
-import { useEffect, useMemo, useState } from "react";
-import { Canvas } from "@react-three/fiber";
-import { OrbitControls } from "@react-three/drei";
-import * as THREE from "three";
+import { Component, Suspense, memo, type ReactNode } from 'react';
+import { Canvas } from '@react-three/fiber';
+import { useCityStore } from '../stores/useCityStore';
+import { Buildings } from '../city/layers/Buildings';
+import { Roads } from '../city/layers/Roads';
+import { LandCover } from '../city/layers/LandCover';
+import { Vegetation } from '../city/layers/Vegetation';
+import { Waterways } from '../city/layers/Waterways';
+import { Terrain } from '../city/terrain/Terrain';
+import { UrbanDetails } from '../city/layers/UrbanDetails';
+import { EnvironmentLighting } from '../city/environment/EnvironmentLighting';
+import { CityNavigation } from '../city/scene/CityNavigation';
+import { InspectionRenderer } from '../city/scene/InspectionRenderer';
+import type { TerrainModel } from '../city/terrain/terrainHeight';
+import { DrainageNetwork } from '../city/drainage/DrainageNetwork';
+import type { DrainageNetworkData } from '../city/drainage/types';
+import type { GeoFeatureCollection } from '../city/geo/geojsonTypes';
 
-import { useCityStore } from "../stores/useCityStore";
-import { LandCover } from "../city/layers/LandCover";
-
-import { Buildings } from "../city/layers/Buildings";
-import { Roads } from "../city/layers/Roads";
-
-import { Vegetation } from "../city/layers/Vegetation";
-// import { Waterways } from "../city/layers/Waterways";
-
-import type {
-  GeoFeature,
-  GeoFeatureCollection,
-} from "../city/geo/geojsonTypes";
-
-const CENTER_LAT = 39.428;
-const CENTER_LON = -0.4184;
-const SIZE = 500;
-const EARTH_RADIUS = 6378137;
-
-function toWorld(coord: number[]): [number, number] {
-  const [lon, lat] = coord;
-  const latitude = THREE.MathUtils.degToRad(CENTER_LAT);
-
-  const x =
-    EARTH_RADIUS *
-    THREE.MathUtils.degToRad(lon - CENTER_LON) *
-    Math.cos(latitude);
-
-  const z = -EARTH_RADIUS * THREE.MathUtils.degToRad(lat - CENTER_LAT);
-
-  return [x, z];
+interface Props { data:GeoFeatureCollection; terrain:TerrainModel; network:DrainageNetworkData }
+const StaticCity=memo(function StaticCity({data,terrain,underground,night}:Pick<Props,'data'|'terrain'>&{underground:boolean;night:boolean}) {
+  return <>
+    <LandCover features={data.features} terrain={terrain} underground={underground}/>
+    <Roads features={data.features} terrain={terrain} underground={underground}/>
+    <Buildings features={data.features} terrain={terrain} underground={underground} night={night}/>
+    <Vegetation features={data.features} terrain={terrain} underground={underground}/>
+    <UrbanDetails features={data.features} terrain={terrain} underground={underground} night={night}/>
+  </>;
+});
+function CityContent({data,terrain,network}:Props) {
+  const underground=useCityStore(s=>s.mode==='underground');
+  const night=useCityStore(s=>s.environment==='night');
+  const depth=useCityStore(s=>s.waterDepth);
+  const opacity=useCityStore(s=>s.terrainOpacity);
+  const visible=useCityStore(s=>s.drainageVisible);
+  const showWater=useCityStore(s=>s.showPipeWater);
+  const fill=useCityStore(s=>s.pipeFill);
+  const highlight=useCityStore(s=>s.highlightCollectors);
+  const selected=useCityStore(s=>s.selectedId);
+  const select=useCityStore(s=>s.select);
+  return <>
+    <EnvironmentLighting night={night} underground={underground}/>
+    <Terrain terrain={terrain} underground={underground} opacity={opacity}/>
+    <StaticCity data={data} terrain={terrain} underground={underground} night={night}/>
+    <Waterways terrain={terrain} depth={depth} underground={underground}/>
+    <DrainageNetwork network={network} underground={underground} visible={visible} fill={fill}
+      highlightCollectors={highlight} selectedId={selected} onSelect={select} showWater={showWater} night={night}/>
+    <CityNavigation network={network}/>
+    <InspectionRenderer inspect={underground&&visible}/>
+  </>;
 }
-
-function insideArea(x: number, z: number) {
-  return Math.abs(x) <= SIZE / 2 && Math.abs(z) <= SIZE / 2;
+class SceneBoundary extends Component<{children:ReactNode},{error:string|null}> {
+  state={error:null as string|null};
+  static getDerivedStateFromError(error:Error){return {error:error.message};}
+  render(){return this.state.error?<div className="scene-message" role="alert"><h2>The 3D scene could not start</h2><p>{this.state.error}</p><p>Enable WebGL in your browser and reload this page.</p></div>:this.props.children;}
 }
-
-function roadWidth(type: string): number {
-  const widths: Record<string, number> = {
-    primary: 11,
-    secondary: 9,
-    tertiary: 8,
-    residential: 6,
-    living_street: 5,
-    service: 4,
-    pedestrian: 4,
-    footway: 2,
-    cycleway: 2,
-  };
-
-  return widths[type] ?? 5;
-}
-
-function UndergroundPreview({ visible }: { visible: boolean }) {
-  if (!visible) return null;
-
-  // Red demostrativa. NO representa el
-  // alcantarillado real de Paiporta.
-  return (
-    <group name="Synthetic Drainage Preview">
-      <mesh position={[0, -3.5, 0]} rotation={[0, 0, Math.PI / 2]}>
-        <cylinderGeometry args={[1.4, 1.4, 460, 12]} />
-        <meshStandardMaterial color="#38bdf8" />
-      </mesh>
-
-      <mesh position={[0, -3.5, 0]} rotation={[Math.PI / 2, 0, 0]}>
-        <cylinderGeometry args={[1.2, 1.2, 460, 12]} />
-        <meshStandardMaterial color="#0284c7" />
-      </mesh>
-    </group>
-  );
-}
-
-function CityContent({ data }: { data: GeoFeatureCollection }) {
-  const mode = useCityStore((s) => s.mode);
-  const underground = mode === "underground";
-
-  return (
-    <>
-      <ambientLight intensity={0.85} />
-
-      <hemisphereLight args={["#dbeafe", "#475569", 1.1]} />
-
-      <directionalLight
-        position={[180, 260, 100]}
-        intensity={1.25}
-        castShadow
-        shadow-mapSize={[2048, 2048]}
-        shadow-camera-left={-300}
-        shadow-camera-right={300}
-        shadow-camera-top={300}
-        shadow-camera-bottom={-300}
-      />
-
-      <mesh position={[0, -0.55, 0]} receiveShadow={!underground}>
-        <boxGeometry args={[SIZE, 1, SIZE]} />
-
-        <meshStandardMaterial
-          color={underground ? "#8ca9b7" : "#a3b2b9"}
-          transparent={underground}
-          opacity={underground ? 0.1 : 1}
-          roughness={1}
-          depthWrite={!underground}
-        />
-      </mesh>
-
-      <LandCover features={data.features} underground={underground} />
-
-      <Vegetation features={data.features} underground={underground} />
-
-      <Roads features={data.features} underground={underground} />
-
-      {/* <Waterways features={data.features} underground={underground} /> */}
-
-      {/*
-      TODO — UrbanFlow AI: Waterways
-
-      Water rendering is temporarily disabled because the current
-      GeoJSON representation produces incorrect overlapping surfaces.
-
-      Future implementation will use verified geographic data
-      to reconstruct the real Barranco del Poyo channel.
-  */}
-
-      <Buildings features={data.features} underground={underground} />
-
-      <UndergroundPreview visible={underground} />
-
-      <OrbitControls
-        makeDefault
-        enableRotate
-        enableZoom
-        enablePan
-        enableDamping
-        dampingFactor={0.08}
-        rotateSpeed={0.7}
-        zoomSpeed={1.0}
-        panSpeed={0.8}
-        screenSpacePanning
-        minDistance={5}
-        maxDistance={1100}
-        minPolarAngle={0}
-        maxPolarAngle={Math.PI}
-        target={[0, 0, 0]}
-      />
-    </>
-  );
-}
-
-export function CityScene() {
-  const [data, setData] = useState<GeoFeatureCollection | null>(null);
-
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    fetch("/data/paiporta.geojson")
-      .then((response) => {
-        if (!response.ok) {
-          throw new Error(`GeoJSON not found (HTTP ${response.status})`);
-        }
-        return response.json();
-      })
-      .then((json) => {
-        if (
-          json.type !== "FeatureCollection" ||
-          !Array.isArray(json.features)
-        ) {
-          throw new Error("Invalid GeoJSON");
-        }
-
-        if (!cancelled) setData(json);
-      })
-      .catch((err) => {
-        if (!cancelled) {
-          setError(String(err.message ?? err));
-        }
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  if (error) {
-    return (
-      <div style={{ padding: 24, color: "#dc2626" }}>
-        Error loading Paiporta: {error}
-      </div>
-    );
-  }
-
-  if (!data) {
-    return (
-      <div style={{ padding: 24 }}>Loading Paiporta geographical data...</div>
-    );
-  }
-
-  return (
-    <Canvas
-      shadows
-      camera={{
-        position: [350, 320, 350],
-        fov: 48,
-        near: 0.1,
-        far: 1800,
-      }}
-      gl={{ antialias: true }}
-    >
-      <color attach="background" args={["#a9c4d4"]} />
-      <CityContent data={data} />
-    </Canvas>
-  );
-}
+export const CityScene=memo(function CityScene(props:Props) {
+  return <SceneBoundary><Canvas shadows dpr={[1,1.5]} camera={{position:[510,440,510],fov:48,near:.1,far:2400}}
+    gl={{antialias:true,powerPreference:'high-performance'}} onPointerMissed={()=>useCityStore.getState().select(null)}>
+    <Suspense fallback={null}><CityContent {...props}/></Suspense>
+  </Canvas></SceneBoundary>;
+});
