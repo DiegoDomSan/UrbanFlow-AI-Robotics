@@ -10,13 +10,18 @@ import './style.css';
 import { RobotMapControls } from './robotics/RobotScene';
 import { buildRoboticsWorld } from './robotics/navigation';
 import { useRoboticsStore } from './robotics/useRoboticsStore';
+import { StormStatus } from './storm/StormStatus';
+import { StormRuntime } from './storm/StormRuntime';
 const RobotWorkshop = lazy(() => import('./robotics/RobotWorkshop').then(({ RobotWorkshop }) => ({ default: RobotWorkshop })));
+const StormPanel = lazy(() => import('./storm/StormPanel').then(({ StormPanel }) => ({ default: StormPanel })));
 
 const number = (value: number, digits = 0) => value.toLocaleString('en-GB', {maximumFractionDigits:digits});
 export default function App() {
   const state = useCityStore();
   const [roboticsOpen, setRoboticsOpen] = useState(false);
+  const [labTab, setLabTab] = useState<'storm'|null>(null);
   const [roboticsActivated, setRoboticsActivated] = useState(false);
+  const [stormActivated, setStormActivated] = useState(false);
   const { data, loading, error } = useCityData();
   const model = useMemo(() => {
     if (!data) return null;
@@ -65,8 +70,8 @@ export default function App() {
           {!underground && <p className="hint">Open Underground View to inspect the pipes.</p>}
         </section>
         <section className="workshop-launchers" aria-label="Learning workshops"><span className="eyebrow">04 / LEARNING WORKSHOPS</span>
-          <button className={roboticsOpen?'active':''} disabled={!model} onClick={()=>{setRoboticsActivated(true);setRoboticsOpen(true);}}><span className="workshop-glyph">⌘</span><span>Robotics<small>Choose · program · explore</small></span><b>↗</b></button>
-          <button disabled title="Storm simulation is developed separately"><span className="workshop-glyph">☂</span><span>Storm Simulation<small>Coming soon</small></span><b>↗</b></button>
+          <button className={roboticsOpen?'active':''} disabled={!model} onClick={()=>{setRoboticsActivated(true);setRoboticsOpen(true);setLabTab(null);}}><span className="workshop-glyph">⌘</span><span>Robotics<small>Choose · program · explore</small></span><b>↗</b></button>
+          <button className={labTab==='storm'?'active':''} disabled={!model} onClick={()=>{setStormActivated(true);setLabTab('storm');setRoboticsOpen(false);}}><span className="workshop-glyph">☂</span><span>Storm Simulation<small>Rainfall, storage and drainage</small></span><b>↗</b></button>
           <button disabled title="AI workshop integration is maintained by Sebas"><span className="workshop-glyph">◈</span><span>Artificial Intelligence<small>Integration by Sebas · coming soon</small></span><b>↗</b></button>
           <p className="hint">Robotics and storm workshops run independently. AI integration is maintained by Sebas.</p>
         </section>
@@ -74,7 +79,10 @@ export default function App() {
       <main className="viewport" aria-label="Interactive Paiporta diorama">
         {data && model ? <CityScene data={data} terrain={model.terrain} network={model.network} /> : <div className="scene-message" role={error?'alert':'status'}><div className="loader-logo">UF</div><h2>{error?'City data could not load':'Preparing Paiporta'}</h2><p>{error || (loading?'Reading local map data and building the model…':'Preparing geometry…')}</p></div>}
         <RobotMapControls />
+        <StormRuntime />
         {roboticsActivated && <Suspense fallback={null}><RobotWorkshop open={roboticsOpen} onClose={()=>setRoboticsOpen(false)} /></Suspense>}
+        {stormActivated && <Suspense fallback={null}><StormPanel open={labTab==='storm'} onClose={()=>setLabTab(null)} /></Suspense>}
+        <StormStatus onOpen={()=>{setStormActivated(true);setLabTab('storm');setRoboticsOpen(false);}} />
         <div className="scene-heading"><span className="eyebrow">PAIPORTA / 39.428° N · 0.4184° W</span><h2>{underground?'The city beneath the city.':'Every street tells a story.'}</h2><p>{underground?'Synthetic drainage · interactive inspection':'Barranco del Poyo · educational city model'}</p></div>
         <div className="camera-tools" role="group" aria-label="Camera">{underground&&<button onClick={()=>state.setCameraView('underground')} title="Underground Overview">◈ <span>Underground Overview</span></button>}<button onClick={()=>state.setCameraView('isometric')} title="Reset isometric view">↗ <span>Isometric</span></button><button onClick={()=>state.setCameraView('top')} title="Top view">⊞ <span>Top</span></button><button onClick={()=>state.setCameraView('section')} title="Terrain section view">▰ <span>Section</span></button></div>
         <div className="scene-bottom"><span className="view-chip"><i className={underground?'cyan':'cyan'}/>{underground?'UNDERGROUND':'SURFACE'}<b>500 × 500 m</b></span><span className="north-marker">↑ N</span></div>
