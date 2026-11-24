@@ -1,3 +1,4 @@
+# Python
 .venv/
 
 # Resultados que se regeneran ejecutando los scripts
@@ -12,3 +13,28 @@ drainage-control/resultados/tormentas_entrenamiento/
 # Backend
 backend/temporal/
 .stale/
+__pycache__/
+*.pyc
+
+# Node.js
+node_modules/
+npm-debug.log*
+
+# Build outputs
+dist/
+build/
+
+# macOS
+.DS_Store
+
+# Environment variables and secrets
+.env
+.env.*
+!.env.example
+
+# Editor files
+.vscode/
+.idea/
+
+# Logs
+*.log
