@@ -29,6 +29,7 @@ from entorno_ia import (HORAS_DESPUES_DE_LLOVER, HORAS_SIMULACION, UMBRAL_SALIDA
 
 SEGUNDOS_POR_PASO = 300
 UMBRAL_ALERTA_BARRANCO_M3 = 50   # m³ fuera del cauce para avisar (evita alertas por un pico de un minuto)
+PASOS_SECO_PARA_RESOLVER = 12 #12 pasos de 5 minutos = 1 hora seguido para ocnsidersarse seco
 ESTRATEGIAS = {"sin_control": "Sin control", "reglas": "Reglas", "ia": "IA (PPO)"}
 TIPOS_AVERIA = {
     "valvula_atascada": {"elementos": ["1", "2"], "nombre": "Válvula atascada"},
@@ -85,6 +86,7 @@ class Sesion:
         self.fecha = None
         self.exceso_total = self.desborde_total = 0.0
         self.pendientes = []          # (id_alerta, tarea) esperando un robot libre
+        self.pasos_seco = {}  #id_alerta -> pasos segudios con la calle seca
         self.terminado = False
 
     # --- Averías -----------------------------------------------------------------------
@@ -153,7 +155,15 @@ class Sesion:
             return
         if tarea == "inspeccion":
             averia = next((a for a in self.averias_activas.values() if a["elemento"] == alerta["elemento"]), None)
-            if averia:
+            if robot.tipo == "dron":
+                # Desde el aire no se ve dentro de una tubería enterrada: solo síntomas en la superficie.
+                # La confirmación real la hará el robot de tuberías con su cámara.
+                texto = (f"{robot.id} ve síntomas desde el aire junto a {alerta['nombre']}, pero no puede ver "
+                         f"dentro de la tubería: va el robot de tuberías a comprobarlo.")
+                self.detector.cambiar_estado(alerta["id"], "sospecha", self.hora, texto)
+                eventos.append(texto)
+                decisiones.append(self._asignar(alerta["id"], "reparacion", cortadas, eventos))
+            elif averia:
                 texto = f"{robot.id} confirma la avería en {alerta['nombre']}."
                 self.detector.cambiar_estado(alerta["id"], "confirmada", self.hora, texto)
                 eventos.append(texto)
@@ -227,11 +237,17 @@ class Sesion:
                  "esperado": UMBRAL_SALIDA, "unidad": "m³/s"}, "alta")
             nuevas.append(alerta)
             eventos.append(f"ALERTA {alerta['id']}: {alerta['titulo']}")
-        # Las inundaciones se dan por resueltas cuando la calle se seca
+        # Las inundaciones se dan por resueltas cuando la calle lleva 1 h seguida seca (histéresis)
         for alerta in self.detector.alertas.values():
-            if alerta["tipo"] == "inundacion" and alerta["estado"] != "resuelta" \
-                    and self.ciudad.charcos.get(alerta["elemento"], 0) < 1:
-                self.detector.cambiar_estado(alerta["id"], "resuelta", self.hora, "La calle ya está seca.")
+            if alerta["tipo"] != "inundacion" or alerta["estado"] == "resuelta":
+                continue
+            if self.ciudad.charcos.get(alerta["elemento"], 0) < 1:
+                self.pasos_seco[alerta["id"]] = self.pasos_seco.get(alerta["id"], 0) + 1
+            else:
+                self.pasos_seco[alerta["id"]] = 0
+            if self.pasos_seco[alerta["id"]] >= PASOS_SECO_PARA_RESOLVER:
+                self.detector.cambiar_estado(alerta["id"], "resuelta", self.hora,
+                                             "La calle lleva 1 hora seca: inundación terminada.")
 
         # Robots: primero lo que estaba esperando, luego las alertas nuevas
         if self.despacho_automatico:
